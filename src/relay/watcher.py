@@ -32,22 +32,40 @@ def _ignored(name: str, patterns: list[str]) -> bool:
     return any(fnmatch.fnmatch(name, pat) for pat in patterns)
 
 
-def _is_stable(path: Path, checks: int, interval: float = 1.0) -> bool:
-    """복사·저장이 진행 중인 파일을 거르기 위해 크기가 멈췄는지 확인함."""
-    try:
-        last = path.stat().st_size
-    except OSError:
-        return False
-    for _ in range(max(checks - 1, 0)):
-        time.sleep(interval)
+def _filter_stable(items: list["Candidate"], checks: int, interval: float = 1.0) -> list["Candidate"]:
+    """복사·저장이 진행 중인 파일을 걸러냄.
+
+    파일마다 따로 재우면 대기 시간이 파일 수에 비례해 폭증하므로,
+    전체 크기를 한 번에 훑고 한 번만 쉬는 방식으로 처리함.
+    (파일 300건 기준: 건별 방식 300초 → 이 방식 1초)
+    """
+    if checks <= 1 or not items:
+        return items
+
+    survivors = list(items)
+    sizes: dict[Path, int] = {}
+    for c in survivors:
         try:
-            now = path.stat().st_size
+            sizes[c.path] = c.path.stat().st_size
         except OSError:
-            return False
-        if now != last:
-            return False
-        last = now
-    return True
+            sizes[c.path] = -1
+
+    for _ in range(checks - 1):
+        time.sleep(interval)
+        still: list[Candidate] = []
+        for c in survivors:
+            try:
+                now = c.path.stat().st_size
+            except OSError:
+                continue  # 사라졌거나 잠김 → 다음 주기에 다시 시도함
+            if now == sizes[c.path]:
+                still.append(c)
+            else:
+                sizes[c.path] = now  # 아직 쓰는 중
+        survivors = still
+        if not survivors:
+            break
+    return survivors
 
 
 def collect(cfg: Config, *, since: datetime | None = None, check_stability: bool = True) -> list[Candidate]:
@@ -83,7 +101,7 @@ def collect(cfg: Config, *, since: datetime | None = None, check_stability: bool
 
     found.sort(key=lambda c: c.mtime)
     if check_stability:
-        found = [c for c in found if _is_stable(c.path, cfg.stable_checks)]
+        found = _filter_stable(found, cfg.stable_checks)
     return found
 
 

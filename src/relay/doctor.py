@@ -29,6 +29,39 @@ OK, WARN, FAIL = "[정상]", "[주의]", "[실패]"
 TASK_NAMES = ("HermesDailyReportRelay", "HermesDailyReportRelayLogon")
 
 
+def classify_task_command(command: str) -> tuple[str, str]:
+    """예약 작업의 실행 명령줄을 보고 실행 가능 여부를 판정함.
+
+    예약 작업 세션에는 대화형 PATH 가 없으므로, 이름만 지정된 실행 파일과
+    Microsoft Store 스텁은 실행되지 않음. 이 판정이 이번 장애의 핵심임.
+
+    반환: (등급, 설명) — 등급은 OK / WARN / FAIL 중 하나임.
+    """
+    command = (command or "").strip()
+    if not command:
+        return WARN, "실행 명령을 읽지 못함 — 작업 스케줄러에서 직접 확인 필요함"
+
+    # 맨 앞 토큰이 실행 파일임. 경로에 공백이 있으면 따옴표로 감싸여 있음.
+    if command.startswith('"'):
+        parts = command.split('"')
+        exe = parts[1] if len(parts) > 1 else command
+    else:
+        exe = command.split()[0]
+
+    lowered = exe.lower()
+    is_python = lowered.endswith(
+        ("python.exe", "pythonw.exe", "py.exe", "python", "pythonw", "py")
+    )
+    if not is_python:
+        return OK, command
+
+    if "windowsapps" in lowered:
+        return FAIL, f"{command}  ← Microsoft Store 스텁 Python(예약 작업에서 실행되지 않음)"
+    if "\\" not in exe and "/" not in exe:
+        return FAIL, f"{command}  ← 실행 파일이 이름만 지정됨(예약 작업 세션에는 PATH 가 없음)"
+    return OK, command
+
+
 class Report:
     def __init__(self) -> None:
         self.lines: list[str] = []
@@ -211,17 +244,24 @@ def check_scheduled_tasks(rep: Report) -> None:
         if out.returncode != 0:
             rep.add(WARN, f"{name} 미등록")
             continue
-        text = out.stdout.decode("cp949", "replace")
-        stub = "WindowsApps" in text
-        bare = any(line.strip().endswith(("python.exe", "pythonw.exe", "python", "py.exe"))
-                   and ":" not in line.split(":", 1)[-1][:3] for line in text.splitlines())
-        detail = []
+        # 한글 Windows 는 cp949, 그 외 로캘은 다른 코드페이지를 씀 — 순차 시도함
+        text = ""
+        for enc in ("cp949", "utf-8", "cp437", "latin-1"):
+            try:
+                text = out.stdout.decode(enc)
+                break
+            except UnicodeDecodeError:
+                continue
+
+        # '실행할 작업' / 'Task To Run' 줄에서 실제 명령줄을 추출함
+        command = ""
         for line in text.splitlines():
             if "실행할 작업" in line or "Task To Run" in line:
-                detail.append(line.split(":", 1)[-1].strip())
-        rep.add(FAIL if (stub or bare) else OK, f"{name} 등록됨",
-                (detail[0] if detail else "") +
-                ("  ← Store 스텁 Python 사용(실행 안 됨)" if stub else ""))
+                command = line.split(":", 1)[-1].strip()
+                break
+
+        level, detail = classify_task_command(command)
+        rep.add(level, f"{name} 등록됨", detail)
 
 
 def run_doctor(cfg: Config, *, config_path: str = "config.json") -> int:

@@ -107,13 +107,22 @@ def heartbeat(client: TelegramClient, cfg: Config, state: State, *, dry_run: boo
     state.save()
 
 
+# 파일시스템 시각 정밀도·시계 오차를 감안한 재확인 여유. 중복은 서명 대조로 걸러짐.
+OVERLAP_SECONDS = 300
+
+
 def run_once(cfg: Config, *, dry_run: bool, ignore_state: bool = False) -> int:
     state = State(Path(cfg.state_path))
     client = TelegramClient(cfg.bot_token, timeout=cfg.timeout_seconds,
                             max_retries=cfg.max_retries, proxy_url=cfg.proxy_url)
 
-    first_run = not Path(cfg.state_path).exists()
-    since = backfill_since(cfg) if first_run else None
+    # 기준 시각 이후 파일만 훑음. 매 주기 폴더 전체를 재해시하지 않기 위함임.
+    scan_started = time.time()
+    watermark = None if ignore_state else state.watermark
+    if watermark is None:
+        since = backfill_since(cfg)
+    else:
+        since = datetime.fromtimestamp(watermark - OVERLAP_SECONDS)
     candidates = collect(cfg, since=since)
 
     missing = [d for d in cfg.watch_dirs if not Path(d).exists()]
@@ -121,11 +130,13 @@ def run_once(cfg: Config, *, dry_run: bool, ignore_state: bool = False) -> int:
         LOG.error("감시 폴더 접근 불가 — %s (예약 작업 계정 권한/드라이브 매핑 확인 필요함)", d)
 
     sent = failed = skipped = 0
+    unfinished: list[float] = []  # 처리하지 못한 파일의 수정시각 — 기준 시각을 여기서 멈춤
     for c in candidates:
         try:
             sig = file_signature(c.path)
         except OSError as exc:
             LOG.warning("서명 계산 실패 — %s : %s", c.path, exc)
+            unfinished.append(c.mtime)
             continue
         if not ignore_state and state.is_sent(c.key, sig):
             skipped += 1
@@ -137,6 +148,13 @@ def run_once(cfg: Config, *, dry_run: bool, ignore_state: bool = False) -> int:
                 state.save()
         else:
             failed += 1
+            unfinished.append(c.mtime)
+
+    if not dry_run:
+        # 실패한 파일보다 앞으로 기준 시각을 옮기면 그 파일은 영영 재시도되지 않음.
+        # 따라서 가장 이른 미처리 시각(없으면 이번 스캔 시작 시각)까지만 전진시킴.
+        state.watermark = min(unfinished) if unfinished else scan_started
+        state.save()
 
     heartbeat(client, cfg, state, dry_run=dry_run)
     LOG.info("실행 요약 — 대상 %d건 / 전송 %d / 중복생략 %d / 실패 %d%s",

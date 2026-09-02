@@ -94,12 +94,17 @@ class Config:
 
 
 def _coerce(raw: dict[str, Any]) -> dict[str, Any]:
-    """config.json 의 알려진 키만 통과시킴(오탈자 키는 무시하지 않고 알림)."""
+    """알려진 키만 통과시킴. 오탈자 키는 무시하지 않고 알림.
+
+    JSON 에는 주석 문법이 없으므로, 밑줄로 시작하는 키(예: "_주의")는
+    설명용 주석으로 보고 조용히 건너뜀. 예시 설정 파일이 이 방식을 씀.
+    """
     known = {f for f in Config.__dataclass_fields__}
-    unknown = sorted(set(raw) - known)
+    data = {k: v for k, v in raw.items() if not k.startswith("_")}
+    unknown = sorted(set(data) - known)
     if unknown:
         raise ConfigError("설정 파일에 알 수 없는 키 있음: " + ", ".join(unknown))
-    return {k: v for k, v in raw.items() if k in known}
+    return {k: v for k, v in data.items() if k in known}
 
 
 def _env_override(cfg: Config) -> Config:

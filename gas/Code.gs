@@ -234,14 +234,17 @@ function relay_(dryRun) {
     var stored = p.getProperty(PROP.WATERMARK);
     var watermark = stored ? Number(stored) : (Date.now() - BACKFILL_HOURS * 3600 * 1000);
 
+    var scanStarted = Date.now();
     var items = collect_(c, watermark);
     var map = sentMap_();
     var sent = 0, skipped = 0, failed = 0;
-    var maxUpdated = watermark;
+    // 처리하지 못한 파일의 수정시각. 기준 시각을 이 지점보다 앞으로 옮기면
+    // 해당 파일은 다음 조회 범위에서 빠져 영영 재시도되지 않음.
+    var unfinished = [];
 
     for (var i = 0; i < items.length; i++) {
       var it = items[i];
-      if (map[it.id] === it.updated) { skipped++; maxUpdated = Math.max(maxUpdated, it.updated); continue; }
+      if (map[it.id] === it.updated) { skipped++; continue; }
 
       if (dryRun) {
         Logger.log('[시험] 발송 생략 — ' + it.name);
@@ -257,19 +260,20 @@ function relay_(dryRun) {
           tgSendDocument_(c, fileBlob_(it.file), caption_(it));
         }
         map[it.id] = it.updated;
-        maxUpdated = Math.max(maxUpdated, it.updated);
         saveSentMap_(map);
-        p.setProperty(PROP.WATERMARK, String(maxUpdated));
         sent++;
         Logger.log('전송 완료 — ' + it.name);
       } catch (e) {
         failed++;
+        unfinished.push(it.updated);
         Logger.log('전송 실패 — ' + it.name + ' : ' + e.message);
       }
     }
 
-    if (!dryRun && failed === 0) {
-      p.setProperty(PROP.WATERMARK, String(Math.max(maxUpdated, watermark)));
+    if (!dryRun) {
+      // 가장 이른 미처리 시각까지만 전진시킴. 모두 성공했으면 이번 조회 시작 시각까지.
+      var next = unfinished.length ? Math.min.apply(null, unfinished) : scanStarted;
+      p.setProperty(PROP.WATERMARK, String(Math.max(next, watermark)));
     }
 
     heartbeat_(c, dryRun);

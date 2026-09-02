@@ -34,7 +34,9 @@ def file_signature(path: Path, *, hash_bytes: int = 1024 * 1024) -> str:
 class State:
     def __init__(self, path: Path):
         self.path = path
-        self.data: dict[str, Any] = {"version": STATE_VERSION, "sent": {}, "last_heartbeat": ""}
+        self.data: dict[str, Any] = {
+            "version": STATE_VERSION, "sent": {}, "last_heartbeat": "", "watermark": None,
+        }
         self._load()
 
     def _load(self) -> None:
@@ -53,6 +55,7 @@ class State:
             self.data = raw
             self.data.setdefault("sent", {})
             self.data.setdefault("last_heartbeat", "")
+            self.data.setdefault("watermark", None)
 
     def is_sent(self, key: str, signature: str) -> bool:
         return self.data["sent"].get(key) == signature
@@ -63,6 +66,16 @@ class State:
             # 오래된 것부터 정리(dict 삽입 순서 활용)
             for old in list(self.data["sent"])[: len(self.data["sent"]) - MAX_ENTRIES]:
                 del self.data["sent"][old]
+
+    @property
+    def watermark(self) -> float | None:
+        """여기까지는 처리 완료했다는 기준 시각(epoch 초). None 이면 최초 실행임."""
+        value = self.data.get("watermark")
+        return float(value) if value is not None else None
+
+    @watermark.setter
+    def watermark(self, value: float | None) -> None:
+        self.data["watermark"] = value
 
     @property
     def last_heartbeat(self) -> str:
