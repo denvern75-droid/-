@@ -1,0 +1,33 @@
+{
+  "_주의": "bot_token 은 이 파일에 넣지 말고 환경변수 TELEGRAM_BOT_TOKEN 사용을 권장함. 파일에 넣을 경우 config.json 은 .gitignore 로 제외됨.",
+
+  "chat_id": "123456789",
+  "message_thread_id": null,
+
+  "watch_dirs": [
+    "C:\\Users\\SAMSUNG\\OneDrive\\업무보고"
+  ],
+  "_watch_dirs_주의": "예약 작업 세션에는 %OneDrive% 환경변수와 매핑 드라이브(Z: 등)가 없음. 반드시 절대경로 또는 UNC 경로(\\\\PC명\\공유폴더)를 쓸 것.",
+
+  "recursive": true,
+  "extensions": [".hwp", ".hwpx", ".docx", ".xlsx", ".pdf", ".txt", ".csv"],
+  "ignore_patterns": ["~$*", ".~*", "*.tmp", "*.crdownload", "*.part", "Thumbs.db"],
+
+  "send_file": true,
+  "send_preview": true,
+  "preview_chars": 700,
+
+  "poll_seconds": 60,
+  "stable_checks": 2,
+  "backfill_hours": 24,
+
+  "state_path": "state\\state.json",
+  "log_path": "logs\\relay.log",
+
+  "heartbeat_enabled": true,
+  "heartbeat_hour": 9,
+
+  "timeout_seconds": 60,
+  "max_retries": 5,
+  "proxy_url": ""
+}

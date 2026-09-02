@@ -1,0 +1,15 @@
+{
+  "_설명": "Google Drive 데스크톱 동기화 폴더 기준 설정(매일 16:00 작업용). 현재 연결 보류 상태이므로 예약 작업은 '사용 안 함'으로 등록됨.",
+
+  "chat_id": "123456789",
+  "watch_dirs": [
+    "G:\\내 드라이브\\업무보고"
+  ],
+  "_watch_dirs_주의": "Google Drive 스트리밍 드라이브(G:)는 해당 사용자 로그온 세션에서만 보임. 예약 작업 계정이 같은 사용자여야 함.",
+
+  "extensions": [".hwp", ".hwpx", ".docx", ".xlsx", ".pdf"],
+  "backfill_hours": 24,
+  "state_path": "state\\state-gdrive.json",
+  "log_path": "logs\\relay-gdrive.log",
+  "heartbeat_enabled": false
+}

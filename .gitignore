@@ -1,0 +1,14 @@
+# 비밀값·운영 산출물 — 저장소에 올리지 않음
+config.json
+config.gdrive.json
+state/
+logs/
+backup/
+*.corrupt
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
