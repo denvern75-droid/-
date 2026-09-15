@@ -1,0 +1,51 @@
+{
+  "preset_id": "jeobgeunseong-shorts-style",
+  "version": "1.0",
+  "reference": "병원 정문에서 혼자 갈 수 있을까? (9:16 / 24fps / 40.67s)",
+  "output_spec": {
+    "aspect_ratio": "9:16",
+    "resolution": "1080x1920",
+    "fps": 24,
+    "audio": "TTS narration + BGM (ducking)"
+  },
+  "style_lock": "[STYLE LOCK] photorealistic cinematic, vertical 9:16, Korean urban public health facility (hospital lobby / community center / public health center). Muted grey-neutral palette + one signature accent: vivid yellow tactile paving (#F2C230). Recurring subject: a middle-aged Korean man navigating alone with a white cane, blue short-sleeve shirt, black backpack, glasses — shown from BEHIND / over-the-shoulder / cane-and-feet close-up only, never front face. Soft daylight, gimbal-stabilized smooth motion, no handheld shake. No on-screen text, no letters, no logos.",
+  "subject_anchor": "중년 남성 시각장애 당사자, 파란 반팔 상의, 검정 백팩, 흰 지팡이, 안경. 정면 얼굴 금지 — 뒷모습/오버숄더/손·지팡이·발 클로즈업만.",
+  "palette": {
+    "base": "public-facility neutral grey",
+    "accent_tactile": "#F2C230",
+    "caption_body": "#1A2A4A",
+    "caption_highlight": "amber"
+  },
+  "caption_anchor": {
+    "position": "top",
+    "lines": 2,
+    "safe_zone_top_pct": 12,
+    "safe_zone_top_max_pct": 20,
+    "font": "Noto Sans CJK KR Bold",
+    "contrast_min": 4.5,
+    "rule": "자막 문구 = 내레이션 문구와 완전 일치"
+  },
+  "camera_anchor": {
+    "stabilization": "gimbal, smooth only",
+    "forbidden": ["handheld shake", "flicker", "strobe", "rapid whip pan"],
+    "180_degree_rule": true
+  },
+  "composition_frames": [
+    { "cut": 1, "t": "0-10",  "shot": "facility exterior wide, low-angle, sky headroom", "move": "rapid push-in", "role": "hook" },
+    { "cut": 2, "t": "10-20", "shot": "lobby eye-level full, floor-tile vanishing point", "move": "slow dolly-in", "role": "arrival" },
+    { "cut": 3, "t": "20-30", "shot": "subject medium / over-the-shoulder, path start", "move": "lateral tracking", "role": "wayfinding" },
+    { "cut": 4, "t": "30-40", "shot": "kiosk / info-desk hands close-up", "move": "match cut hand->device", "role": "reception" },
+    { "cut": 5, "t": "40-50", "shot": "split-screen facility comparison (same angle/distance/entry-direction)", "move": "fixed 3-panel", "role": "comparison" },
+    { "cut": 6, "t": "50-60", "shot": "over-the-shoulder cinematic, backlit golden tone, shallow DoF", "move": "rapid push-in", "role": "closing" }
+  ],
+  "comparison_rule": "비교컷은 시설별 동일 앵글·동일 거리·동일 진입방향(뒤에서 진입) 강제 — 접근성 격차 공정 프레이밍",
+  "accessibility_gate": {
+    "no_photosensitive_triggers": true,
+    "no_pity_framing": "부감 단독샷 등 동정 프레임 금지",
+    "reenactment_label": "AI/연출 재현컷은 '재현' 표기"
+  },
+  "numeric_integrity": {
+    "rule": "시설 수·문항 수 등은 확정 자료 대조 후 고정, 미확정 수치 삽입 금지"
+  },
+  "routing": ["shorts-production", "shorts-render", "shorts-audio", "shorts-publish"]
+}
