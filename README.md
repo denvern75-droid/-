@@ -23,4 +23,5 @@ python -m textaction
 - 모델 변경: `setx TEXTACTION_MODEL "claude-haiku-5-5"` (비용 절감용)
 - exe 빌드: `build_windows.bat` 실행 → `dist\TextAction.exe`
 
-기획·비용·리스크는 [docs/01_기획서_윈도우용_Claude_업무도구.md](docs/01_기획서_윈도우용_Claude_업무도구.md) 참조함.
+- 기획·비용·리스크: [docs/01_기획서_윈도우용_Claude_업무도구.md](docs/01_기획서_윈도우용_Claude_업무도구.md)
+- AI 맞춤 프로그램 제작 절차·요청서 양식: [docs/02_AI_맞춤프로그램_제작절차.md](docs/02_AI_맞춤프로그램_제작절차.md)
