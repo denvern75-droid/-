@@ -1,0 +1,5 @@
+# 민감정보 폴더는 버전관리·외부 공유 대상에서 제외
+_private/*
+!_private/_안내.md
+.obsidian/workspace*.json
+.trash/
