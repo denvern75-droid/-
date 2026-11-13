@@ -21,7 +21,7 @@
 - `test/engine.test.js` : 엔진 단위 테스트 10건(통과)
 
 ## 4. 최초 1회 준비 (필수)
-1. HTTPS 주소로 배포함(위치·센서·설치 기능은 HTTPS 필수). 예: GitHub Pages(저장소 Settings → Pages → 브랜치 선택 → `/walknav`).
+1. HTTPS 주소로 배포함(위치·센서·설치 기능은 HTTPS 필수). 예: GitHub Pages(저장소 Settings → Pages → 브랜치 선택 → `/docs`).
 2. 폰에서 열어 **홈 화면에 추가**함. 위치·동작(방향) 권한 허용함.
 3. 동행인(활동지원사·동료)과 실제 경로를 한 번 걸으며 **[현장 기록 모드]** 에서 지점마다 [여기 저장] 실행함.
    - 기록 대상: 금호역 출구 앞 / 신림역 출구 앞 / 신림사거리.신림역(21350) 정류장 / 하차 정류장(문성초등학교.금천가족문화센터) / 사무실 입구
@@ -55,5 +55,5 @@
 
 ## 8. 테스트
 ```
-node --test walknav/test/engine.test.js
+node --test docs/test/engine.test.js
 ```
