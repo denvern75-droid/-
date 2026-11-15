@@ -487,3 +487,72 @@ test('재검증 3차 회귀: 다음 버튼을 놓치고 버스에 타도 하차 
   assert.ok(log.some((s) => /지금 서는 정류장 이름이 문성초등학교이면 내리세요/.test(s)));
   assert.equal(W.spoken('시흥대로138길, 독산로85길 37, 5623번'), '시흥대로138길, 독산로85길 37, 5 6 2 3번');
 });
+
+test('버튼 없는 모드: 봉천역 출발 경로를 다음 버튼 없이 끝까지 진행', () => {
+  const log = []; let t = 20_000_000; const autos = [];
+  const io = { speak: (s) => { log.push(s); }, vibrate() {}, beep() {}, notify() {}, onAuto: (k) => autos.push(k) };
+  const route = JSON.parse(JSON.stringify(require('../route.json'))).routes.find((r) => r.id === 'B');
+  const eng = W.createEngine({ io, now: () => t, handsFree: true });
+  const M = (Math.PI * 6371000) / 180;
+  const fix = (lat, lng, speed, hd) => { t += 1000; eng.onFix({ lat, lng, acc: 7, heading: hd == null ? null : hd, speed, t }); eng.tick(); };
+  const wait = (sec) => { for (let i = 0; i < sec; i++) { t += 1000; eng.tick(); } };
+  eng.start(route, 0);
+  assert.ok(!log.some((s) => /버튼/.test(s)), '버튼 없는 모드에서는 버튼 안내를 말하지 않음: ' + log.filter((s) => /버튼/.test(s)).join('|'));
+  // 1) 지하철: 위치 없이 6분. 시간 기준 하차 예고
+  wait(5 * 60);
+  assert.ok(log.some((s) => /곧 하차역일 수 있음. 안내방송에서 구로디지털단지역이 나오면 내리세요/.test(s)), '시간 기준 하차 예고');
+  assert.equal(eng.status().legIndex, 0, '위치 없이 도보 구간으로 넘어가지 않음');
+  // 2) 지상 복귀: 정류장에서 북쪽 150m, 걷는 속도 → 도보 구간 자동 시작
+  const stop = route.legs[1].points[0];
+  for (let i = 0; i < 10; i++) fix(stop.lat + (150 - i) / M, stop.lng + 0.0004, 1.0, 180);
+  assert.equal(eng.status().legIndex, 1, '지상에 나오면 도보 안내 시작');
+  assert.ok(log.some((s) => /지상에 나온 것으로 보고 도보 안내를 시작함/.test(s)));
+  // 3) 정류장 근처까지 걷고(60m 안에서는 방향 안내 중지), 버스 탑승 → 차량 속도로 자동 전환
+  for (let i = 0; i < 100; i++) fix(stop.lat + Math.max(8, 140 - i * 1.2) / M, stop.lng + 0.00005, i < 110 ? 1.2 : 0, 180);
+  assert.equal(eng.status().legIndex, 1);
+  const al = route.legs[2].alight;
+  let lat = stop.lat;
+  for (let i = 0; i < 14; i++) { lat -= 8 / M; fix(lat, stop.lng, 8, 180); }
+  assert.equal(eng.status().legIndex, 2, '버스에 타면 하차 알림 시작');
+  // 4) 버스로 하차 정류장까지, 정차 후 걷는 속도 → 내린 것으로 자동 전환
+  while ((lat - al.lat) * M > 10) { lat -= 8 / M; fix(lat, al.lng, 8, 180); }
+  assert.ok(log.some((s) => /하차벨을 누르세요/.test(s)), '하차 예고');
+  for (let i = 0; i < 14; i++) fix(al.lat, al.lng + (i * 0.5) / (M * Math.cos(al.lat * Math.PI / 180)), 0.6, 90);
+  assert.equal(eng.status().legIndex, 3, '내리면 도보 안내 시작');
+  assert.ok(autos.includes('alight'));
+  // 5) 승강장에서는 방향 안내 없음 → 40m 넘게 벗어나면 안내 시작
+  const k = M * Math.cos(al.lat * Math.PI / 180);
+  const n0 = log.length;
+  for (let i = 0; i < 10; i++) fix(al.lat, al.lng + (7 + i) / k, 1.0, 90);
+  assert.ok(!log.slice(n0).some((s) => /미터|방향/.test(s) && !/건넘|건너/.test(s)), '승강장 근처에서는 방향·거리 안내 없음: ' + log.slice(n0).join('|'));
+  for (let i = 0; i < 40; i++) fix(al.lat - (i * 1.0) / M, al.lng + 45 / k, 1.0, 180);
+  assert.ok(log.some((s) => /승강장에서 벗어난 것으로 보고 방향 안내를 시작함/.test(s)));
+  assert.ok(log.some((s) => /좌회전 지점까지 대략 \d+미터/.test(s)), '건넌 뒤 좌회전 지점 안내');
+  assert.ok(!log.some((s) => /버튼/.test(s)), '끝까지 버튼 안내 없음');
+});
+
+test('버튼 없는 모드: 잘못 내린 것으로 판단해도 다시 달리면 버스 구간으로 돌아감, 다른 역에서 나오면 경고', () => {
+  const log = []; let t = 21_000_000;
+  const io = { speak: (s) => { log.push(s); }, vibrate() {}, beep() {}, notify() {} };
+  const route = JSON.parse(JSON.stringify(require('../route.json'))).routes.find((r) => r.id === 'B');
+  const M = (Math.PI * 6371000) / 180;
+  const eng = W.createEngine({ io, now: () => t, handsFree: true });
+  const fix = (lat, lng, speed) => { t += 1000; eng.onFix({ lat, lng, acc: 7, heading: 180, speed, t }); eng.tick(); };
+  const al = route.legs[2].alight;
+  eng.start(route, 2);                                             // 버스 구간
+  let lat = al.lat + 600 / M;
+  for (let i = 0; i < 62; i++) { lat -= 8 / M; fix(lat, al.lng, 8); }            // 하차 정류장 약 100m 앞까지 주행
+  for (let i = 0; i < 13; i++) fix(lat, al.lng, 0.2);              // 신호 대기로 13초 정차 → 내린 것으로 판단
+  assert.equal(eng.status().legIndex, 3);
+  for (let i = 0; i < 12; i++) { lat -= 8 / M; fix(lat, al.lng, 8); }            // 다시 달림 → 아직 버스 안
+  assert.equal(eng.status().legIndex, 2, '버스 구간으로 복귀');
+  assert.ok(log.some((s) => /아직 버스 안인 것으로 보고 하차 알림을 계속함/.test(s)));
+  // 다른 역(1km 떨어진 곳)에서 지상으로 나온 경우
+  log.length = 0;
+  const e2 = W.createEngine({ io, now: () => t, handsFree: true });
+  e2.start(route, 0); const stop = route.legs[1].points[0];
+  for (let i = 0; i < 200; i++) { t += 1000; e2.tick(); }          // 지하 200초
+  for (let i = 0; i < 12; i++) { t += 1000; e2.onFix({ lat: stop.lat + 1000 / M, lng: stop.lng, acc: 8, heading: 0, speed: 1.0, t }); e2.tick(); }
+  assert.equal(e2.status().legIndex, 0, '다른 역에서는 도보 안내로 넘어가지 않음');
+  assert.ok(log.some((s) => /1킬로미터 떨어져 있음. 내린 역이 맞는지/.test(s)), log.join('|'));
+});

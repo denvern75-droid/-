@@ -5,7 +5,7 @@
   const $ = (id) => document.getElementById(id);
   const LS_ROUTE = 'walknav.route.v1', LS_SET = 'walknav.settings.v1';
 
-  const set = Object.assign({ voice: true, rate: 1.0, vib: true, beep: true, beacon: false, noti: false },
+  const set = Object.assign({ voice: true, rate: 1.0, vib: true, beep: true, beacon: false, noti: false, handsFree: true },
     JSON.parse(localStorage.getItem(LS_SET) || '{}'));
   const saveSet = () => localStorage.setItem(LS_SET, JSON.stringify(set));
 
@@ -73,9 +73,10 @@
       navigator.serviceWorker && navigator.serviceWorker.ready.then((r) =>
         r.showNotification('길동무', { body: text, tag: 'walknav', renotify: true, vibrate: [200, 100, 200] }));
     },
+    onAuto(type, f) { tripEvent('자동:' + ({ alight: '내림', board: '탑승', crossed: '건넘' }[type] || type), f && f.lat ? { at: [+f.lat.toFixed(6), +f.lng.toFixed(6)] } : {}); },
     onLegChange(i, l) { refreshRec(); tripEvent('구간', { leg: i, title: l && l.title }); },
   };
-  const engine = W.createEngine({ io });
+  const engine = W.createEngine({ io, handsFree: set.handsFree });
   const kf = W.createKalman();
   let geoErr = { code: 0, t: 0 };
   const WL = window.WalkLearn;
@@ -547,6 +548,8 @@
   syncLive();
   $('rate').oninput = (e) => { set.rate = +e.target.value; e.target.setAttribute('aria-valuetext', '속도 ' + set.rate + '배'); saveSet(); };
   $('vibOn').onchange = (e) => { set.vib = e.target.checked; saveSet(); };
+  $('hfOn').checked = set.handsFree;
+  $('hfOn').onchange = (e) => { set.handsFree = e.target.checked; saveSet(); engine.setHandsFree(set.handsFree); };
   $('beepOn').onchange = (e) => { set.beep = e.target.checked; saveSet(); };
   $('beaconOn').onchange = (e) => { set.beacon = e.target.checked; saveSet(); };
   $('notiOn').onchange = async (e) => {
