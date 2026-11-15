@@ -313,7 +313,7 @@ test('안전 재검증 회귀: 꺾는 곳 건너뛰기는 가까이 왔다가 �
   // (2) 12m 옆을 스쳐 지나가 계속 멀어지면 알리고 다음 지점으로
   log.length = 0; eng = W.createEngine({ io, now: () => t }); eng.start(mkRoute(), 0);
   for (let n = 70; n <= 135; n += 1.3) { t += 1000; eng.onFix({ ...at(n, 12), acc: 5, heading: 0, speed: 1.3, t }); }
-  assert.equal(eng._S.pi, 1); assert.ok(log.some((s) => /꺾는 곳 지점을 지나친 것으로 보여 다음 지점으로 안내함/.test(s)));
+  assert.equal(eng._S.pi, 1); assert.ok(log.some((s) => /꺾는 곳 지점을 지나친 것 같음.*다음 지점으로 안내함/.test(s)));
 });
 
 test('안전 재검증 회귀: 지하철 하차 후 첫 지점이 500m 넘게 떨어지면 역 확인 안내, 집에서 출발하는 구간에는 적용하지 않음', () => {
@@ -437,6 +437,7 @@ test('출근 하차 후 구간: 좌회전 지점 근처에서 랜드마크를 �
   const dTurn = W.dist(route.legs[li - 1].alight, turn), dOff = W.dist(turn, dest);
   assert.ok(dTurn > 120 && dTurn < 160 && dOff > 180 && dOff < 230, `하차→모퉁이 ${Math.round(dTurn)}m, 모퉁이→사무실 ${Math.round(dOff)}m`);
   const eng = W.createEngine({ io, now: () => t }); eng.start(route, li);
+  eng.next();   // 길을 건넜다고 확인(그 전에는 방향 안내 없음)
   // 인도(승강장 동쪽 20m)에서 남쪽으로 걸어 모퉁이까지
   const a = route.legs[li - 1].alight, M = (Math.PI * 6371000) / 180;
   for (let s = 0; s <= dTurn; s += 1.2) { t += 1000; eng.onFix({ lat: a.lat - s / M, lng: turn.lng + 0.00005, acc: 6, heading: 180, speed: 1.2, t }); }
@@ -444,4 +445,45 @@ test('출근 하차 후 구간: 좌회전 지점 근처에서 랜드마크를 �
   assert.ok(log.some((x) => /이 근처가 좌회전 지점임. 서울정형외과의원이 있는 건물을 끼고 왼쪽 골목/.test(x)), log.slice(-4).join('|'));
   assert.equal(eng._S.pi, 1, '사무실 안내로 넘어감');
   assert.ok(!log.some((x) => /도착/.test(x)));
+});
+
+test('재검증 3차 회귀: 중앙 승강장 하차 직후에는 건넜다고 확인하기 전까지 방향·거리 안내가 없음(다시 듣기 포함)', () => {
+  const log = []; let t = 12_000_000;
+  const io = { speak: (s) => { log.push(s); }, vibrate() {}, beep() {}, notify() {} };
+  const route = require('../route.json').routes[0];
+  const li = route.legs.findIndex((l, i) => i > 0 && route.legs[i - 1].type === 'bus');
+  const a = route.legs[li - 1].alight;
+  const eng = W.createEngine({ io, now: () => t }); eng.start(route, li);
+  for (let i = 0; i < 30; i++) { t += 1000; eng.onFix({ lat: a.lat, lng: a.lng, acc: 6, heading: null, speed: i % 5 ? 0 : 0.8, t }); }
+  eng.repeat();
+  const bad = log.filter((s) => /미터, |시 방향|정면|목표는/.test(s));
+  assert.equal(bad.length, 0, '승강장 위에서 방향·거리를 말하면 안 됨: ' + bad.join('|'));
+  assert.ok(eng.status().waitCross);
+  assert.match(log[log.length - 1], /왼쪽으로 길을 건넘.*인도에 올라섰으면 다음 버튼/);
+  eng.next(); assert.equal(eng._S.pi, 0, '건넜음 확인은 지점을 넘기지 않음'); assert.ok(!eng.status().waitCross);
+  t += 1000; eng.onFix({ lat: a.lat, lng: a.lng + 0.0002, acc: 6, heading: 180, speed: 1.2, t });
+  assert.match(log[log.length - 1], /좌회전 지점까지 대략 \d+미터. 가던 길을 따라 계속 가세요/);   // 꺾는 곳은 방위 없이 거리만
+});
+
+test('재검증 3차 회귀: 다음 버튼을 놓치고 버스에 타도 하차 알림이 시작되고, 승강장이 둘이면 먼저 지나는 쪽 기준으로 알림', () => {
+  const log = []; let t = 13_000_000;
+  const io = { speak: (s) => { log.push(s); }, vibrate() {}, beep() {}, notify() {} };
+  const route = require('../route.json').routes[0];
+  const li = route.legs.findIndex((l) => l.type === 'bus') - 1;         // 정류장으로 가는 도보 구간
+  const stop = route.legs[li].points[route.legs[li].points.length - 1], al = route.legs[li + 1].alight;
+  assert.ok(W.hasXY(al.alt), '하차 승강장 두 곳 좌표');
+  const eng = W.createEngine({ io, now: () => t }); eng.start(route, li);
+  for (let i = 0; i < 5; i++) { t += 1000; eng.onFix({ lat: stop.lat, lng: stop.lng, acc: 6, heading: null, speed: 0, t }); }
+  assert.equal(eng.status().legIndex, li);                               // 다음 버튼을 누르지 않음
+  const M = (Math.PI * 6371000) / 180;
+  for (let i = 1; i <= 15; i++) { t += 1000; eng.onFix({ lat: stop.lat - (8 * i) / M, lng: stop.lng, acc: 8, heading: 180, speed: 8, t }); }   // 버스 주행
+  assert.equal(eng.status().legIndex, li + 1, '버스 구간으로 자동 전환');
+  assert.ok(log.some((s) => /버스에 탄 것으로 보고 하차 알림을 시작함/.test(s)));
+  assert.ok(eng.status().busEarly, '주행 중 다음 버튼은 확인이 필요함');
+  // 북쪽 승강장(먼저 지나는 쪽)에 접근하면 알림
+  log.length = 0;
+  for (const dN of [450, 140, 30]) { t += 5000; eng.onFix({ lat: al.alt.lat + dN / M, lng: al.alt.lng, acc: 8, heading: 180, speed: 8, t }); }
+  assert.ok(log.some((s) => /하차 준비/.test(s)) && log.some((s) => /하차벨을 누르세요. 버스가 서고 정류장 이름이 문성초등학교이면/.test(s)), log.join('|'));
+  assert.ok(log.some((s) => /지금 서는 정류장 이름이 문성초등학교이면 내리세요/.test(s)));
+  assert.equal(W.spoken('시흥대로138길, 독산로85길 37, 5613번'), '시흥대로138길, 독산로85길 37, 5 6 1 3번');
 });

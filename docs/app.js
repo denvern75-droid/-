@@ -450,6 +450,8 @@
   const confirmNext = twice('next', () => engine.next(), '안내 중인 지점을 건너뜁니다. 맞으면 한 번 더 누르세요.');
   const doNext = () => {            // 지하철 역 세기, 버스 하차, 위치 정보 없는 지점은 한 번에. 안내 중인 도보 지점을 건너뛰는 것만 확인
     const s = engine.status();
+    if (s.waitCross) { engine.next(); render(); return; }   // 길을 건넜다는 확인은 한 번에
+    if (s.leg && s.leg.type === 'bus' && s.busEarly) return twice('busnext', () => engine.next(), '아직 달리는 중이거나 하차 정류장 전인 것 같음. 정말 내렸으면 한 번 더 누르세요.')();
     if (s.leg && s.leg.type === 'walk' && s.point && W.hasXY(s.point) && !s.near) return confirmNext();   // '부근' 안내를 받은 뒤에는 찾았다는 뜻이므로 한 번에
     engine.next(); render();
   };
