@@ -26,7 +26,7 @@
       $('now').textContent = text;
       if (!set.voice || !('speechSynthesis' in window)) return;
       if (prio === 'high') speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance(text);
+      const u = new SpeechSynthesisUtterance(W.spoken(text));
       u.lang = 'ko-KR'; u.rate = set.rate; if (koVoice) u.voice = koVoice;
       speechSynthesis.speak(u);
     },
@@ -177,7 +177,7 @@
     persist(); refreshRec();
   }
   function stopLearn(msg) {
-    learner = null; $('learnBtn').textContent = '🚶 직접 걸으며 자동 기록';
+    learner = null; $('learnBtn').textContent = '직접 걸으며 자동 기록';
     if (msg) io.speak(msg, 'high');
   }
   $('learnBtn').onclick = async () => {
@@ -189,7 +189,7 @@
       say: (t) => io.speak(t, 'normal'),
       onPoint: applyLearnedPoint, onLegDone: applyLearnedLeg,
       onDone: () => stopLearn() });
-    $('learnBtn').textContent = '⏹ 학습 보행 중지';
+    $('learnBtn').textContent = '학습 보행 중지';
     io.speak('학습 보행을 시작함. 평소처럼 걸으세요. 위치는 자동으로 기록되며 별도 조작은 필요 없음. 하늘이 트인 곳에서 5초 정도 서 있으면 집 위치가 먼저 기록됨.', 'high');
     learner.start(+$('learnFrom').value || 0);
   };
@@ -303,7 +303,9 @@
   // 설정
   $('voiceOn').checked = set.voice; $('rate').value = set.rate; $('rateV').textContent = set.rate;
   $('vibOn').checked = set.vib; $('beepOn').checked = set.beep; $('notiOn').checked = set.noti;
-  $('voiceOn').onchange = (e) => { set.voice = e.target.checked; saveSet(); };
+  const syncLive = () => $('now').setAttribute('aria-live', set.voice ? 'off' : 'polite'); // 앱 음성이 꺼지면 화면낭독기가 대신 읽음
+  $('voiceOn').onchange = (e) => { set.voice = e.target.checked; saveSet(); syncLive(); };
+  syncLive();
   $('rate').oninput = (e) => { set.rate = +e.target.value; $('rateV').textContent = set.rate; saveSet(); };
   $('vibOn').onchange = (e) => { set.vib = e.target.checked; saveSet(); };
   $('beepOn').onchange = (e) => { set.beep = e.target.checked; saveSet(); };

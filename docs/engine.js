@@ -182,6 +182,17 @@
     return { update, reset() { ref = null; st = null; } };
   }
 
+  // 음성(TTS)·화면낭독용 문장 정리: 낭독에서 오독되는 표기를 소리 나는 대로 바꿈
+  function spoken(t) {
+    return String(t)
+      .replace(/(\d)\s*-\s*(\d)/g, '$1의 $2')               // 8-3 → 8의 3
+      .replace(/\b(\d{5})\b/g, (m) => m.split('').join(' ')) // 정류장 번호 21002 → 2 1 0 0 2 (한 자리씩)
+      .replace(/[·•・]/g, ', ')                                 // 51·5602 → 51, 5602
+      .replace(/[()（）]/g, ', ')                               // 괄호는 쉼표로
+      .replace(/[→▶◀▷]/g, ', ')
+      .replace(/\s*,(\s*,)+/g, ',').replace(/,\s*([.?!])/g, '$1').replace(/\s+/g, ' ').replace(/,\s*$/, '').trim();
+  }
+
   // ---------- 진동 패턴 (좌 짧짧 / 우 짧짧짧 / 정방향 짧 1 / 유턴 길길길 / 도착 길게) ----------
   const PAT = {
     ahead: [50],
@@ -410,5 +421,5 @@
     return { start, repeat, next, skipLeg, prevLeg, onFix, onCompass, status, _S: S };
   }
 
-  return { createEngine, robustFuse, geoMedian, createKalman, median, medianPoint, spreadM, REC, dist, bearing, norm180, segDist, clock, cardinal, fmtDist, compassHeading, PAT, hasXY };
+  return { createEngine, spoken, robustFuse, geoMedian, createKalman, median, medianPoint, spreadM, REC, dist, bearing, norm180, segDist, clock, cardinal, fmtDist, compassHeading, PAT, hasXY };
 });
