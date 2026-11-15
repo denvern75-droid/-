@@ -11,7 +11,7 @@
 
   let data = null, route = null, started = false;
   let lastFix = null, rawFix = null, watchId = null, wake = null, smoothSin = 0, smoothCos = 0, hasCompass = false;
-  let actx = null, batch = [], batchTimer = null;
+  let actx = null, batch = [], batchTimer = null, liveAt = 0;
 
   // ---------- 출력(음성/진동/비프/알림) ----------
   let koVoice = null;
@@ -27,7 +27,10 @@
       const voiceOn = set.voice && 'speechSynthesis' in window;
       const busy = voiceOn && (speechSynthesis.speaking || speechSynthesis.pending || batch.length > 0);
       if (prio === 'normal' && busy) return false;
-      $('now').textContent = W.spoken(text);          // 화면낭독기가 읽는 문장도 낭독용으로 정리
+      const live = $('now'), tNow = Date.now();        // 화면낭독기가 읽는 문장도 낭독용으로 정리
+      if (!voiceOn && prio === 'queue' && tNow - liveAt < 1500) live.textContent += ' ' + W.spoken(text);   // 음성 끔 모드: 같은 순간의 이어지는 문장이 앞 문장(예: 내리세요)을 덮어쓰지 않게 이어 붙임
+      else live.textContent = W.spoken(text);
+      liveAt = tNow;
       if (!voiceOn) return true;
       const utter = (t) => W.spoken(t).split(/(?<=[.?!])\s+/).filter(Boolean).forEach((s) => {   // 문장 단위로 읽어 중간에 끊기지 않게
         const u = new SpeechSynthesisUtterance(s); u.lang = 'ko-KR'; u.rate = set.rate; if (koVoice) u.voice = koVoice; speechSynthesis.speak(u);
@@ -91,7 +94,7 @@
       lastFix = kf.update(rawFix);       // 안내는 칼만 평활 값으로
       if (learner) learner.onFix(lastFix);
       engine.onFix(lastFix); render();
-    }, (e) => { const t = Date.now(); if (geoErr.code === e.code && t - geoErr.t < 90000) return; geoErr = { code: e.code, t }; if (e.code === 3 && started && !['walk', 'bus'].includes((engine.status().leg || {}).type)) return; io.speak(e.code === 1 ? '위치 권한이 꺼져 있음. 설정에서 위치 권한을 허용해 주세요.' : e.code === 2 ? '위치를 잡을 수 없음. GPS를 켜고 하늘이 트인 곳으로 이동해 주세요.' : '위치 확인이 늦어지고 있음. 잠시 기다려 주세요.', 'queue'); },
+    }, (e) => { const t = Date.now(); if (t - geoErr.t < 90000) return; geoErr = { code: e.code, t }; if (e.code === 3) return; /* 위치 확인 지연은 엔진의 GPS 안내가 대신 알림 */ io.speak(e.code === 1 ? '위치 권한이 꺼져 있음. 설정에서 위치 권한을 허용해 주세요.' : e.code === 2 ? '위치를 잡을 수 없음. GPS를 켜고 하늘이 트인 곳으로 이동해 주세요.' : '위치 확인이 늦어지고 있음. 잠시 기다려 주세요.', 'queue'); },
     { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
   }
   async function startCompass() {
@@ -450,7 +453,8 @@
     if (s.leg && s.leg.type === 'walk' && s.point && W.hasXY(s.point) && !s.near) return confirmNext();   // '부근' 안내를 받은 뒤에는 찾았다는 뜻이므로 한 번에
     engine.next(); render();
   };
-  $('nextBtn').onclick = doNext;
+  $('nextBtn').onclick = () => { doNext(); saveProg(); };
+  $('detailBtn').onclick = () => engine.detail();
   $('prevBtn').onclick = () => { const s = engine.status(); if (s.leg && s.leg.type === 'subway' && s.stIdx > 0) { engine.prevLeg(); render(); } else twice('prev', () => engine.prevLeg(), '이전 단계로 돌아갑니다. 맞으면 한 번 더 누르세요.')(); };
   $('skipBtn').onclick = twice('skip', () => engine.skipLeg(), '이 단계를 건너뜁니다. 맞으면 한 번 더 누르세요.');
   $('shareBtn').onclick = async () => {

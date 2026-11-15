@@ -297,7 +297,7 @@ test('지하철에서 나온 직후 GPS 두절로 오인하지 않음, 역 세�
   const n = log.length; eng.onCompass(0);
   assert.equal(log.length, n, '구간 진입 직후에는 GPS 두절 경고를 하지 않음');
   t += 21000; eng.onCompass(0);
-  assert.match(log[log.length - 1], /아직 GPS 신호를 잡지 못했음/);
+  assert.match(log[log.length - 1], /지상으로 나오면 방향을 알려줌/);   // 지하철 직후에는 기다리라고 하지 않음
 });
 
 test('안전 재검증 회귀: 꺾는 곳 건너뛰기는 가까이 왔다가 멀어질 때만, 알림과 함께', () => {
@@ -313,7 +313,7 @@ test('안전 재검증 회귀: 꺾는 곳 건너뛰기는 가까이 왔다가 �
   // (2) 12m 옆을 스쳐 지나가 계속 멀어지면 알리고 다음 지점으로
   log.length = 0; eng = W.createEngine({ io, now: () => t }); eng.start(mkRoute(), 0);
   for (let n = 70; n <= 135; n += 1.3) { t += 1000; eng.onFix({ ...at(n, 12), acc: 5, heading: 0, speed: 1.3, t }); }
-  assert.equal(eng._S.pi, 1); assert.ok(log.some((s) => /꺾는 곳을 지나친 것으로 보여 다음 지점으로 안내함/.test(s)));
+  assert.equal(eng._S.pi, 1); assert.ok(log.some((s) => /꺾는 곳 지점을 지나친 것으로 보여 다음 지점으로 안내함/.test(s)));
 });
 
 test('안전 재검증 회귀: 지하철 하차 후 첫 지점이 500m 넘게 떨어지면 역 확인 안내, 집에서 출발하는 구간에는 적용하지 않음', () => {
@@ -408,4 +408,21 @@ test('경로 소개: 처음부터 시작하면 전체 길 설명을 먼저 읽�
   assert.equal(log[0][0], 'high'); assert.equal(log[1][0], 'queue');
   const ret = require('../route.json').routes[1];
   assert.equal(ret.id, 'R'); assert.match(ret.overview, /온 길을 그대로 되돌아감.*여의도역 5번 출구/);
+});
+
+test('접근성 재검증 2차 회귀: 구간 진입 때는 짧게 말하고, 전체 설명은 요청 시. 문장 끝 버스 번호도 한 자리씩', () => {
+  const log = [];
+  const io = { speak: (s, p) => { log.push(s); }, vibrate() {}, beep() {}, notify() {} };
+  const route = require('../route.json').routes[0];
+  const eng = W.createEngine({ io, now: () => 1 });
+  eng.start(route, 0);
+  const walkIdx = route.legs.findIndex((l, i) => i > 0 && route.legs[i - 1].type === 'bus');
+  while (eng.status().legIndex < walkIdx) eng.skipLeg();
+  const said = log[log.length - 1];
+  assert.ok(said.length <= 90, `하차 직후 안내가 김(${said.length}자): ${said}`);
+  assert.match(said, /도로 한가운데 승강장.*왼쪽으로 길을 건넘/);
+  eng.detail();
+  assert.match(log[log.length - 1], /서울정형외과의원.*1층에 행복한 공인중개사 사무소.*3층/);
+  assert.equal(W.spoken('탑승 버스는 51, 5602, 5627.'), '탑승 버스는 51, 5 6 0 2, 5 6 2 7.');
+  assert.equal(W.spoken('거리 1.5킬로미터, 273미터.'), '거리 1.5킬로미터, 273미터.');
 });

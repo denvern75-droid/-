@@ -204,7 +204,7 @@
     return String(t)
       .replace(/(\d)\s*-\s*(\d)/g, '$1의 $2')               // 8-3 → 8의 3
       .replace(/\b(\d{5})\b/g, (m) => m.split('').join(' ')) // 정류장 번호 21002 → 2 1 0 0 2 (한 자리씩)
-      .replace(/(?<![\d.])(\d{3,4})(?![\d.]|\s*(미터|킬로|개|분|초|도|회|배|원|년|번지))/g, (m) => m.split('').join(' ')) // 버스 번호 5602 → 5 6 0 2
+      .replace(/(?<![\d.])(\d{3,4})(?!\d|\.\d|\s*(미터|킬로|개|분|초|도|회|배|원|년|번지))/g, (m) => m.split('').join(' ')) // 버스 번호 5602 → 5 6 0 2
       .replace(/[·•・]/g, ', ')                                 // 51·5602 → 51, 5602
       .replace(/\(약\s*(\d+)\s*도\)/g, ' 약 $1도')                // (약 85도) → 약 85도 (조사가 끊겨 읽히지 않게)
       .replace(/([가-힣A-Za-z])\.([가-힣A-Za-z])/g, '$1 $2')           // 문성초등학교.금천가족문화센터 → 마침표 없이
@@ -301,6 +301,15 @@
       return `${head} ${l.intro || ''}`.trim();
     }
 
+    // 구간에 들어설 때는 짧게(핵심 두 문장), 전체 설명은 '구간 설명 듣기'로 요청할 때만 읽음. 하차 직후 긴 낭독이 주변 소리를 가리지 않게 함
+    function legBrief(l, i) {
+      const full = legIntro(l, i);
+      if (l.brief) return l.brief;
+      const parts = full.split(/(?<=[.?!])\s+/).filter(Boolean);
+      return parts.length <= 2 ? full : parts.slice(0, 2).join(' ') + ' 자세한 설명은 구간 설명 듣기 버튼.';
+    }
+    function detail() { const l = leg(); if (l) say(legIntro(l, S.li), 'high'); else if (S.last) say(S.last, 'high'); }
+
     function enterLeg(i, prefix) {
       if (i >= S.route.legs.length) {
         S.li = S.route.legs.length; // 종료
@@ -308,11 +317,12 @@
         io.vibrate(PAT.arrive); return;
       }
       S.li = i; S.pi = 0; S.stIdx = 0; S.minD = Infinity; S.busStage = 0;
-      S.lastGuidePos = null; S.lastGuideAt = 0; S.warnedMissing = null; S.inCnt = 0; S.busMin = null; S.busFar = false; S.busNoteAt = 0; S.offRoute = false; S.farWarned = false; S.fixNear = false; S.farCnt = 0; S.atSaid = false; S.busRiding = false; S.medianAt = 0; S.inHist = []; S.prevD = null; S.closeCnt = 0; S.nearSaid = false; S.awayCnt = 0; S.farAt = 0;
+      S.lastGuidePos = null; S.lastGuideAt = 0; S.warnedMissing = null; S.inCnt = 0; S.busMin = null; S.busFar = false; S.busNoteAt = 0; S.offRoute = false; S.farWarned = false; S.fixNear = false; S.farCnt = 0; S.atSaid = false; S.busRiding = false; S.medianAt = 0; S.medianRep = false; S.nearRep = 0; S.inHist = []; S.prevD = null; S.closeCnt = 0; S.nearSaid = false; S.awayCnt = 0; S.farAt = 0;
       S.lastFixAt = now(); S.gpsLost = false; S.fixInLeg = false;   // 지하 구간 동안의 무수신을 새 구간의 GPS 두절로 오인하지 않음
       const l = leg();
-      if (prefix) { say(prefix, 'high'); say(legIntro(l, i), 'queue'); }   // 급한 말을 먼저, 소개는 이어서(짧은 두 번의 낭독)
-      else say(legIntro(l, i), 'high');
+      const brief = prefix === S.route.overview ? legIntro(l, i) : legBrief(l, i);   // 출발 전 경로 소개와 함께일 때만 전체 설명
+      if (prefix) { say(prefix, 'high'); say(brief, 'queue'); }   // 급한 말을 먼저, 소개는 이어서
+      else say(brief, 'high');
       if (io.onLegChange) io.onLegChange(i, l);
     }
 
@@ -358,8 +368,8 @@
       }
       // 도로 한가운데(중앙차로) 정류장: 직선 방향 안내는 차도를 가로지르게 하므로 60m 안에서는 방향·비프·도착 판정을 모두 멈추고 도움을 받게 함
       if (t.median && d <= 60) {
-        if (!S.medianAt || tNow - S.medianAt >= 45000) {
-          const firstTime = !S.medianAt; S.medianAt = tNow; S.nearSaid = true; io.vibrate(PAT.warn);
+        if (!S.medianAt || (tNow - S.medianAt >= 60000 && !S.medianRep)) {
+          const firstTime = !S.medianAt; if (!firstTime) S.medianRep = true; S.medianAt = tNow; S.nearSaid = true; io.vibrate(PAT.warn);
           say(firstTime
             ? `${nm(t)} 근처임. 이 정류장은 도로 한가운데 승강장이라 여기서부터 방향 안내를 멈춤. 횡단보도 위치는 앱이 모름. 주변 사람에게 중앙 버스정류장으로 가는 횡단보도를 물어보세요. 승강장에 올라서면 다음 버튼을 누르세요.`
             : `${nm(t)}은 도로 한가운데 승강장임. 횡단보도는 주변 사람에게 물어보세요. 승강장에 올라서면 다음 버튼을 누르세요.`, firstTime ? 'high' : 'queue');
@@ -376,15 +386,15 @@
       const h = S.inHist, n = h.length;
       const two = n >= 2 && h[n - 1] && h[n - 2], three = n >= 3 && two && h[n - 3];
       if (weak) {   // 확인되지 않은 좌표에서는 도착을 선언하지 않음: 저장된 위치에 왔음을 알리고 이용자가 찾은 뒤 다음 버튼으로 진행
-        if (two && !S.atSaid) { S.atSaid = true; S.nearSaid = true; S.nearAt = tNow; io.vibrate(PAT.ahead); say(`저장된 위치에 왔음. 실제 ${nm(t)}은 이 주변 수십 미터 안에 있을 수 있음. 주변 사람에게 물어보고, 찾았으면 다음 버튼을 누르세요.`, 'high'); }
+        if (two && !S.atSaid) { S.atSaid = true; S.nearSaid = true; S.nearAt = tNow; io.vibrate(PAT.ahead); say(`저장된 위치에 왔음. 찾는 곳은 이 주변 수십 미터 안에 있을 수 있음. 주변 사람에게 물어보고, 찾았으면 다음 버튼을 누르세요.`, 'high'); }
       } else
       // 걷는 중에는 연속 3회, 멈춰 서 있으면 연속 2회로 확정(스치는 GPS 오차로 거짓 도착하지 않게). 옆을 지나쳐 확정되지 않으면 아래 지나침 안내가 멈춰서 확인하게 함
       if (three || (two && fix.speed < 0.5) || (d <= rIn * 0.5 && prevD != null && prevD <= rIn * 0.75)) return arrive(t);   // 한 번의 측정만으로는 확정하지 않음
       // 약한 좌표: 30m 안에 들어오면 '부근'임을 한 번 알리고 안내는 계속함(일찍 도착 처리해 이용자를 혼자 두지 않음)
-      if (weak && S.nearSaid && d <= 45 && tNow - S.nearAt >= 30000) { S.nearAt = tNow; say(`${nm(t)} 부근임. 위치 정보에 오차가 있을 수 있음. 찾았으면 다음 버튼을 누르세요.`, 'queue'); }   // 근처에서 머무는 동안 30초마다 다시 알림
+      if (weak && S.nearSaid && d <= 45 && tNow - S.nearAt >= 45000) { S.nearAt = tNow; S.nearRep = (S.nearRep || 0) + 1; if (S.nearRep === 1) say('찾았으면 다음 버튼을 누르세요.', 'queue'); else io.vibrate(PAT.ahead); }   // 재알림은 한 번만, 이후에는 진동만
       if (weak && d <= 30 && !S.nearSaid) {
         S.nearSaid = true; S.nearAt = tNow; io.vibrate(PAT.ahead);
-        say(`${nm(t)} 부근임. 이 근처 30미터 안에 있을 수 있음. 주변 사람이나 안내방송으로 확인하고, 찾았으면 다음 버튼을 누르세요.`, 'high');
+        say(`${nm(t)} 부근임. 30미터 안에 있을 수 있음. 주변 사람에게 확인하고, 찾았으면 다음 버튼을 누르세요.`, 'high');
       }
       // 오디오 비콘(좌우 스테레오): 목적지가 있는 쪽 귀에서 소리가 남. 이어폰 사용 시 효과적
       if (io.beacon && tNow - S.lastBeacon >= 1200) {
@@ -405,13 +415,13 @@
       else if ((t.kind === 'turn' || t.kind === 'crossing') && S.minD <= Math.max(20, 2 * base) && S.awayCnt >= 3 && S.pi < l.points.length - 1) {
         // 꺾는 곳 가까이(20m 안)까지 왔다가 3회 연속 멀어진 경우만: 스쳐 지나간 것으로 보고 알린 뒤 다음 지점으로
         S.pi++; S.minD = Infinity; S.lastGuidePos = null; S.inHist = []; S.awayCnt = 0; S.nearSaid = false;
-        say(`${t.name}을 지나친 것으로 보여 다음 지점으로 안내함.`, 'queue'); return;
+        say(`${t.name} 지점을 지나친 것으로 보여 다음 지점으로 안내함.`, 'queue'); return;
       }
       else if (endKind && !weak && S.minD < 45 && d > S.minD + C.overshootM && fix.speed >= 0.5 && S.awayCnt >= 3 && tNow - S.lastOverAt > 15000) {   // 서 있을 때의 GPS 잡음으로는 지나침을 말하지 않음
         S.lastOverAt = tNow; io.vibrate(PAT.back);
         const r = relTo(t);
         // GPS 오차로는 '바로 옆을 지남'과 '지나침'을 확실히 구분할 수 없어 단정하지 않고 멈춰서 확인하게 함
-        say(`${nm(t)}을 지나친 것 같음. 멈추세요. ${nm(t)}은 ${r ? r.text : ''}, ${fmtDist(d)} 안팎임. 바로 옆일 수도 있으니 주변을 확인하고, 아니면 그 방향으로 돌아가세요.`, 'high');
+        say(`${nm(t)} 지점을 지나친 것 같음. 멈추세요. 방향은 ${r ? r.text : ''}, 거리는 ${fmtDist(d)} 안팎임. 바로 옆일 수도 있으니 주변을 확인하고, 아니면 그 방향으로 돌아가세요.`, 'high');
         S.minD = d; // 재측정
         return;
       }
@@ -493,7 +503,7 @@
         if (d <= stages[k][0]) {
           S.busStage = k + 1; io.vibrate(k === 2 ? PAT.arrive : PAT.warn);
           if (k === 2 && !wk) return enterLeg(S.li + 1, `${a.name}. ${stages[k][1]}.`);
-          say(`${a.name}. ${stages[k][1]}`, 'high'); break;
+          say(`${stages[k][1]}. ${a.name}.`, 'high'); break;
         }
       }
     }
@@ -502,7 +512,7 @@
       const l = leg(); if (!l || (l.type !== 'walk' && l.type !== 'bus') || !S.lastFixAt) return;
       if (!S.gpsLost && now() - S.lastFixAt >= 20000) {
         S.gpsLost = true; io.vibrate(PAT.warn);
-        say(S.fixInLeg ? 'GPS 신호가 없음. 방금 안내한 위치를 기준으로 계속 가세요. 신호가 돌아오면 알려줌.' : '아직 GPS 신호를 잡지 못했음. 하늘이 트인 곳에서 잠시 기다리세요.', 'queue');
+        say(S.fixInLeg ? 'GPS 신호가 없음. 방금 안내한 위치를 기준으로 계속 가세요. 신호가 돌아오면 알려줌.' : (S.li > 0 && ['subway', 'indoor'].includes(S.route.legs[S.li - 1].type) ? '지상으로 나오면 방향을 알려줌.' : '아직 GPS 신호를 잡지 못했음. 하늘이 트인 곳에서 잠시 기다리세요.'), 'queue');
       }
     }
     function onCompass(h) { S.compass = { val: ((h % 360) + 360) % 360, t: now() }; checkSilence(); }
@@ -518,9 +528,10 @@
     function next() {
       const l = leg(); if (!l) return;
       if (l.type === 'walk') {
-        if (S.pi >= l.points.length - 1) return enterLeg(S.li + 1, '구간 종료.');
-        S.pi++; S.minD = Infinity; S.lastGuidePos = null;
-        return say(`다음 지점, ${l.points[S.pi].name}`, 'high');
+        const cur = l.points[S.pi], tip = cur && cur.say ? cur.say + ' ' : '';
+        if (S.pi >= l.points.length - 1) return enterLeg(S.li + 1, tip + '구간 종료.');
+        S.pi++; S.minD = Infinity; S.lastGuidePos = null; S.inHist = []; S.nearSaid = false; S.atSaid = false; S.medianAt = 0; S.medianRep = false; S.nearRep = 0;
+        return say(`${tip}다음 지점, ${nm(l.points[S.pi])}`, 'high');
       }
       if (l.type === 'subway' && l.stations && S.stIdx < l.stations.length - 1) {
         S.stIdx++;
@@ -567,7 +578,7 @@
       };
     }
 
-    return { start, repeat, next, skipLeg, prevLeg, onFix, onCompass, tick: checkSilence, snapshot, restore, status, _S: S };
+    return { start, repeat, next, skipLeg, prevLeg, onFix, onCompass, tick: checkSilence, detail, snapshot, restore, status, _S: S };
   }
 
   return { createEngine, spoken, robustFuse, geoMedian, createKalman, median, medianPoint, spreadM, REC, dist, bearing, norm180, segDist, clock, cardinal, fmtDist, compassHeading, PAT, hasXY };
