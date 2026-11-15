@@ -77,7 +77,7 @@
     const distance = merged.reduce((a, s) => a + s.len, 0);
     const parts = merged.map((s, k) => k === 0
       ? `처음에 ${W.cardinal(s.b)} 방향으로 ${W.fmtDist(s.len)}`
-      : `${s.turn === 'left' ? '왼쪽' : '오른쪽'}(약 ${s.angle}도)으로 꺾어 ${W.fmtDist(s.len)}`);
+      : `${s.turn === 'left' ? '왼쪽' : '오른쪽'}으로 약 ${s.angle}도 꺾어 ${W.fmtDist(s.len)}`);
     return { poly, segments: merged, turns, distance, text: `${parts.join(', ')} 걸음. 총 약 ${W.fmtDist(distance)}` };
   }
 

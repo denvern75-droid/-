@@ -80,7 +80,7 @@ test('정류장·하차·사무실 자동 기록과 방향 요약', () => {
   assert.ok(s.pts.dst, `사무실 기록됨. 이벤트: ${s.events}`);
   const leg = s.legs.find((l) => l.legIndex === 2);
   assert.ok(leg, '출구→정류장 구간 요약 생성');
-  assert.match(leg.text, /처음에 동쪽 방향으로 .*왼쪽\(약 \d+도\)으로 꺾어/);
+  assert.match(leg.text, /처음에 동쪽 방향으로 .*왼쪽으로 약 \d+도 꺾어/);
   assert.equal(leg.turns.length, 1);
   assert.ok(leg.distance > 230 && leg.distance < 310, `거리 ${Math.round(leg.distance)}m`);
   const last = s.legs.find((l) => l.legIndex === 4);
@@ -96,7 +96,7 @@ test('궤적 분석: ㄱ자 경로에서 방향·꺾는 곳·거리', () => {
   assert.equal(a.turns[0].turn, 'right');
   assert.ok(Math.abs(a.turns[0].angle - 90) < 12);
   assert.ok(Math.abs(a.distance - 250) < 15, `거리 ${a.distance}`);
-  assert.match(a.text, /처음에 북쪽 방향으로 100미터, 오른쪽\(약 \d+도\)으로 꺾어 150미터/);
+  assert.match(a.text, /처음에 북쪽 방향으로 100미터, 오른쪽으로 약 \d+도 꺾어 150미터/);
 });
 
 test('횡단보도에서 잠깐 선 것은 정류장으로 오인하지 않음(걸은 거리 부족)', () => {

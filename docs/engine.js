@@ -59,7 +59,7 @@
   function fmtDist(d) {
     if (d < 20) return `${Math.max(1, Math.round(d))}미터`;
     if (d < 100) return `${Math.round(d / 5) * 5}미터`;
-    if (d < 1000) return `${Math.round(d / 10) * 10}미터`;
+    if (Math.round(d / 10) * 10 < 1000) return `${Math.round(d / 10) * 10}미터`;
     const km = d / 1000;
     return Math.abs(km - Math.round(km)) < 0.05 ? `${Math.round(km)}킬로미터` : `${km.toFixed(1)}킬로미터`;
   }
@@ -203,6 +203,7 @@
     return String(t)
       .replace(/(\d)\s*-\s*(\d)/g, '$1의 $2')               // 8-3 → 8의 3
       .replace(/\b(\d{5})\b/g, (m) => m.split('').join(' ')) // 정류장 번호 21002 → 2 1 0 0 2 (한 자리씩)
+      .replace(/(?<![\d.])(\d{3,4})(?![\d.]|\s*(미터|킬로|개|분|초|도|회|배|원|년|번지))/g, (m) => m.split('').join(' ')) // 버스 번호 5602 → 5 6 0 2
       .replace(/[·•・]/g, ', ')                                 // 51·5602 → 51, 5602
       .replace(/\(약\s*(\d+)\s*도\)/g, ' 약 $1도')                // (약 85도) → 약 85도 (조사가 끊겨 읽히지 않게)
       .replace(/([가-힣A-Za-z])\.([가-힣A-Za-z])/g, '$1 $2')           // 문성초등학교.금천가족문화센터 → 마침표 없이
@@ -236,7 +237,7 @@
       route: null, li: -1, pi: 0, fix: null, compass: null, track: [],
       stIdx: 0, last: '', minD: Infinity,
       lastGuideAt: 0, lastGuidePos: null, lastCls: null, lastCueAt: 0,
-      lastOffAt: 0, lastOverAt: 0, lastBeepAt: 0, lastBeacon: 0, pre: {}, inCnt: 0, pendCls: null, clsStreak: 0, lastFixAt: 0, gpsLost: false, busNoteAt: 0, offRoute: false, farWarned: false, busMin: null, busFar: false, warnedMissing: null, busStage: 0,
+      lastOffAt: 0, lastOverAt: 0, lastBeepAt: 0, lastBeacon: 0, pre: {}, inCnt: 0, pendCls: null, clsStreak: 0, lastFixAt: 0, gpsLost: false, fixInLeg: false, busNoteAt: 0, offRoute: false, farWarned: false, busMin: null, busFar: false, warnedMissing: null, busStage: 0,
     };
 
     const isWeak = (p) => !!p && p.weak === true;   // 걸어서 확인되지 않은 지도 기준 좌표
@@ -245,8 +246,9 @@
 
     function say(text, prio) {
       S.last = text;
-      io.speak(text, prio || 'normal');
-      if (io.notify) io.notify(text);
+      const ok = io.speak(text, prio || 'normal') !== false;   // false = 다른 안내를 말하는 중이라 버려짐
+      if (ok && io.notify) io.notify(text);
+      return ok;
     }
 
     function currentHeading() {
@@ -269,31 +271,33 @@
       return { b, d: dist(f, p), ck, h, text: ck.text };
     }
 
+    const nm = (t) => t.short || t.name;   // 반복 안내에는 짧은 이름 사용
     function guide(reason) {
       const t = target(); if (!t) return;
       const r = relTo(t); if (!r) return;
+      const prio = reason === 'repeat' ? 'high' : reason === 'first' ? 'queue' : 'normal';   // 구간 첫 안내는 소개 뒤에 반드시 이어서 말함
+      if (!say(`${nm(t)}까지 ${isWeak(t) ? '대략 ' : ''}${fmtDist(r.d)}, ${r.text}`, prio)) return;
       S.lastGuideAt = now(); S.lastGuidePos = { lat: S.fix.lat, lng: S.fix.lng };
       S.lastCls = r.ck ? r.ck.cls : null;
-      say(`${t.name}까지 ${isWeak(t) ? '대략 ' : ''}${fmtDist(r.d)}, ${r.text}`, reason === 'repeat' ? 'high' : 'normal');
       if (r.ck) io.vibrate(r.ck.cls === 'ahead' ? PAT.ahead : r.ck.cls.startsWith('left') ? PAT.left : r.ck.cls === 'back' ? PAT.back : PAT.right);
     }
 
     function legIntro(l, i) {
-      const head = `${l.title}.`;
+      const head = l.intro ? '' : `${l.title}.`;   // 소개 문장이 있으면 제목은 읽지 않음(같은 말 반복 방지)
       if (l.type === 'walk') {
         const weak = l.points.filter((p) => hasXY(p) && isWeak(p)).length;
-        return `${head} ${l.intro || ''}` + (l.learned && l.learned.text ? ` 걸었던 기록: ${l.learned.text}.` : '') + (weak ? ' 주의, 위치가 지도 데이터 기준이라 오차가 있을 수 있음. 주변 소리와 표지판을 함께 확인하세요.' : '');
+        return `${head} ${l.intro || ''}`.trim() + (l.learned && l.learned.text ? ` 걸었던 기록: ${l.learned.text}.` : '') + (weak ? ' 위치 정보가 현장에서 확인되지 않아 오차가 있을 수 있음.' : '');
       }
       if (l.type === 'subway') {
         const hasCount = /\d+개 역/.test(l.intro || '');
-        return `${head} ${l.intro || ''}` + (l.stations && l.stations.length > 1 ? ` ${hasCount ? '' : `총 ${l.stations.length - 1}개 역 이동. `}역에 설 때마다 다음 버튼을 누르면 남은 역 수를 알려줌.` : '');
+        return `${head} ${l.intro || ''}`.trim() + (l.stations && l.stations.length > 1 ? ` ${hasCount ? '' : `총 ${l.stations.length - 1}개 역 이동. `}역에 설 때마다 다음 버튼을 누르면 남은 역 수를 알려줌.` : '');
       }
       if (l.type === 'bus') {
         const nl = S.route.legs[i + 1], dst = nl && nl.type === 'walk' ? nl.points[nl.points.length - 1] : null;
         const none = !hasXY(l.alight) && !hasXY(dst);
-        return `${head} ${l.intro || ''}` + (none ? ' 하차 위치 정보가 없음. 안내방송과 승객에게 정류장 이름을 확인하고, 내린 뒤 다음 버튼을 누르세요.' : '');
+        return `${head} ${l.intro || ''}`.trim() + (none ? ' 하차 위치 정보가 없음. 안내방송과 승객에게 정류장 이름을 확인하고, 내린 뒤 다음 버튼을 누르세요.' : '');
       }
-      return `${head} ${l.intro || ''}`;
+      return `${head} ${l.intro || ''}`.trim();
     }
 
     function enterLeg(i, prefix) {
@@ -304,6 +308,7 @@
       }
       S.li = i; S.pi = 0; S.stIdx = 0; S.minD = Infinity; S.busStage = 0;
       S.lastGuidePos = null; S.lastGuideAt = 0; S.warnedMissing = null; S.inCnt = 0; S.busMin = null; S.busFar = false; S.busNoteAt = 0; S.offRoute = false; S.farWarned = false;
+      S.lastFixAt = now(); S.gpsLost = false; S.fixInLeg = false;   // 지하 구간 동안의 무수신을 새 구간의 GPS 두절로 오인하지 않음
       const l = leg();
       if (prefix) { say(prefix, 'high'); say(legIntro(l, i), 'queue'); }   // 급한 말을 먼저, 소개는 이어서(짧은 두 번의 낭독)
       else say(legIntro(l, i), 'high');
@@ -313,15 +318,15 @@
     function arrive(p) {
       io.vibrate(PAT.arrive);
       S.minD = Infinity; S.lastGuidePos = null; S.lastGuideAt = 0; S.inCnt = 0;
-      const msg = (isWeak(p) ? `${p.name} 부근에 도착함. 지도 기준 위치라 오차가 있으니 표지판과 주변 소리로 확인하세요. ${p.say || ''}` : `${p.name} 도착. ${p.say || ''}`).trim();
+      const msg = (isWeak(p) ? `${p.name} 부근에 도착함. 오차가 있을 수 있으니 주변 사람이나 안내방송으로 확인하세요. ${p.say || ''}` : `${p.name} 도착. ${p.say || ''}`).trim();
       if (S.pi >= leg().points.length - 1) enterLeg(S.li + 1, msg);
       else { S.pi++; say(msg, 'high'); }
     }
 
     // ---------- 외부 입력 ----------
     function onFix(fix) {
-      if (S.gpsLost) { S.gpsLost = false; say('GPS 신호가 돌아왔음.', 'queue'); }
-      S.lastFixAt = now();
+      if (S.gpsLost) { S.gpsLost = false; say(S.fixInLeg ? 'GPS 신호가 돌아왔음.' : 'GPS 신호를 잡았음.', 'queue'); }
+      S.lastFixAt = now(); S.fixInLeg = true;
       S.fix = fix;
       S.track.push({ lat: fix.lat, lng: fix.lng, t: fix.t || now() });
       while (S.track.length > 12 || (S.track.length > 2 && S.track[S.track.length - 1].t - S.track[0].t > 15000)) S.track.shift();
@@ -333,7 +338,7 @@
       if (!hasXY(t)) {
         if (S.warnedMissing !== t.id) {
           S.warnedMissing = t.id;
-          say(`${t.name} 좌표가 아직 없음. 기록 모드에서 저장하거나 다음 버튼으로 건너뛰기 바람.`, 'high');
+          say(`${t.name} 위치 정보가 없어 방향을 안내할 수 없음. 주변 사람에게 위치를 물어보세요. 도착하면 다음 버튼을 누르세요.`, 'queue');
           io.vibrate(PAT.warn);
         }
         return;
@@ -399,14 +404,14 @@
       const moving = fix.speed >= 0.9;
       if (cls === S.pendCls) S.clsStreak++; else { S.pendCls = cls; S.clsStreak = 1; }
       const gotHeading = !first && S.lastCls === null && cls !== null; // 첫 안내가 방향 없이 나갔다면 방향 확보 즉시 재안내
-      if (first || gotHeading || (moving && (moved >= C.guideEveryMeters || (tNow - S.lastGuideAt >= C.guideEverySec * 1000 && moved >= 5)))) {
-        return guide('auto');
+      if (first || gotHeading || (moving && (moved >= (cls === 'ahead' ? 80 : C.guideEveryMeters) || (tNow - S.lastGuideAt >= (cls === 'ahead' ? 45 : C.guideEverySec) * 1000 && moved >= 5)))) {   // 맞게 가는 중이면 덜 자주 말함
+        return guide(first ? 'first' : 'auto');
       }
       const wrongWay = moving && cls === 'back' && S.clsStreak >= 3 && tNow - S.lastCueAt >= C.cueGapSec * 1000; // 알려 준 반대 방향으로 계속 걸으면 8초마다 다시 알림
       if (wrongWay || moving && cls && cls !== S.lastCls && S.clsStreak >= 2 && tNow - S.lastCueAt >= (cls === 'ahead' ? 20000 : C.cueGapSec * 1000) && moved >= 3) { // 같은 방향이 연속 2회일 때만(잡음으로 인한 번복 방지)
-        S.lastCueAt = tNow; S.lastCls = cls;
         const short = { ahead: '정면, 맞게 가는 중', 'left-s': '조금 왼쪽', 'right-s': '조금 오른쪽', 'left-m': '왼쪽으로 꺾기', 'right-m': '오른쪽으로 꺾기', 'left-b': '왼쪽 뒤쪽', 'right-b': '오른쪽 뒤쪽', back: '반대 방향, 유턴' }[cls];
-        say(`${short}. ${fmtDist(d)} 남음`, 'normal');
+        if (!say(`${short}. ${fmtDist(d)} 남음`, cls === 'back' ? 'high' : 'normal')) return;   // 유턴 경고는 다른 안내를 끊고 말함
+        S.lastCueAt = tNow; S.lastCls = cls;
         io.vibrate(cls === 'ahead' ? PAT.ahead : cls.startsWith('left') ? PAT.left : cls === 'back' ? PAT.back : PAT.right);
       }
     }
@@ -443,7 +448,7 @@
       const l = leg(); if (!l || (l.type !== 'walk' && l.type !== 'bus') || !S.lastFixAt) return;
       if (!S.gpsLost && now() - S.lastFixAt >= 20000) {
         S.gpsLost = true; io.vibrate(PAT.warn);
-        say('GPS 신호가 없음. 방금 안내한 위치를 기준으로 계속 가세요. 신호가 돌아오면 알려줌.', 'high');
+        say(S.fixInLeg ? 'GPS 신호가 없음. 방금 안내한 위치를 기준으로 계속 가세요. 신호가 돌아오면 알려줌.' : '아직 GPS 신호를 잡지 못했음. 하늘이 트인 곳에서 잠시 기다리세요.', 'queue');
       }
     }
     function onCompass(h) { S.compass = { val: ((h % 360) + 360) % 360, t: now() }; checkSilence(); }
@@ -474,13 +479,19 @@
       enterLeg(S.li + 1);
     }
     function skipLeg() { if (leg()) enterLeg(S.li + 1, '구간을 건너뜀.'); }
-    function prevLeg() { if (S.route) enterLeg(Math.max(0, Math.min(S.li, S.route.legs.length) - 1)); }
+    function prevLeg() {
+      const l = leg();
+      if (l && l.type === 'subway' && l.stations && S.stIdx > 0) { S.stIdx--; return say(`한 역 되돌렸음. 현재 ${l.stations[S.stIdx]}역. 내릴 역까지 ${l.stations.length - 1 - S.stIdx}개 남음.`, 'high'); }
+      if (S.route) enterLeg(Math.max(0, Math.min(S.li, S.route.legs.length) - 1));
+    }
 
     function snapshot() { return S.route && S.li >= 0 && S.li < S.route.legs.length ? { li: S.li, pi: S.pi, stIdx: S.stIdx } : null; }
     function restore(route, snap) {
       S.route = route; S.li = Math.max(0, Math.min(snap.li, route.legs.length - 1)); S.pi = snap.pi || 0; S.stIdx = snap.stIdx || 0;
       S.minD = Infinity; S.lastGuidePos = null; S.lastGuideAt = 0; S.busStage = 0; S.inCnt = 0; S.warnedMissing = null;
-      const l = leg(); say(`이어서 안내함. ${l.title}.`, 'high');
+      const l = leg();
+      say(`이어서 안내함. ${l.title}.` + (l.type === 'subway' && l.stations ? ` 현재 ${l.stations[S.stIdx]}역. 내릴 역까지 ${l.stations.length - 1 - S.stIdx}개 남음.` : ''), 'high');
+      S.lastFixAt = now(); S.gpsLost = false; S.fixInLeg = false;
       if (io.onLegChange) io.onLegChange(S.li, l);
     }
 

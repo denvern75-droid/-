@@ -121,7 +121,7 @@ test('좌표 미기록 지점은 경고하고 오작동하지 않음', () => {
   eng.start({ legs: [{ type: 'walk', title: 'x', intro: '', points: [{ id: 'z', name: '미기록', kind: 'stop', lat: null, lng: null }] }] }, 0);
   assert.ok(!/좌표가 기록되지 않은/.test(log[0]), '구간 소개에서는 좌표 누락을 낭독하지 않음(이용자에게 불필요)');
   fix(at(0, 0));
-  assert.ok(log.some((s) => /좌표가 아직 없음/.test(s)));
+  assert.ok(log.some((s) => /위치 정보가 없어 방향을 안내할 수 없음/.test(s)));
 });
 
 test('다회 기록: 중앙값이 이상치에 강함', () => {
@@ -178,10 +178,11 @@ test('칼만 필터: 진행 방향·속도 추정, 큰 점프 후 재수렴', ()
 
 test('낭독용 변환: 오독되는 표기를 소리 나는 대로', () => {
   assert.equal(W.spoken('빠른 승차 8-3, 정류장 21002'), '빠른 승차 8의 3, 정류장 2 1 0 0 2');
-  assert.equal(W.spoken('일반 51·5602 탑승'), '일반 51, 5602 탑승');
+  assert.equal(W.spoken('일반 51·5602 탑승'), '일반 51, 5 6 0 2 탑승');
   assert.equal(W.spoken('정류장까지 50미터, 7시 방향(왼쪽 뒤)'), '정류장까지 50미터, 7시 방향, 왼쪽 뒤');
   assert.equal(W.spoken('금호역 입구(출구 번호 미정).'), '금호역 입구, 출구 번호 미정.');
-  assert.equal(W.spoken('5623번 버스 도착'), '5623번 버스 도착'); // 4자리 버스 번호는 그대로
+  assert.equal(W.spoken('5623번 버스 도착'), '5 6 2 3번 버스 도착');   // 버스 번호는 한 자리씩
+  assert.equal(W.spoken('약 500미터, 749미터 거리'), '약 500미터, 749미터 거리'); // 거리는 그대로
 });
 
 test('꺾는 곳 사전 예고: 30m 전, 12m 이내 각 1회', () => {
@@ -214,10 +215,10 @@ test('지도 데이터 기준 지점은 안내 시작 때 오차 주의를 알�
   eng.start({ legs: [{ type: 'walk', title: 'x', intro: '', points: [
     { id: 'a', name: '지도기준', kind: 'stop', ...at(10, 10), weak: true, samples: [{ ...at(10, 10), acc: 30, src: 'osm' }] },
     { id: 'b', name: '걸어서확인', kind: 'dest', ...at(20, 20), weak: false, samples: [{ ...at(20, 20), acc: 6, src: 'walk' }] }] }] }, 0);
-  assert.match(log[0], /지도 데이터 기준이라 오차가 있을 수 있음/);
+  assert.match(log[0], /현장에서 확인되지 않아 오차가 있을 수 있음/);
   log.length = 0;
   eng.start({ legs: [{ type: 'walk', title: 'x', intro: '', points: [{ id: 'b', name: '걸어서확인', kind: 'dest', ...at(20, 20), weak: false, samples: [{ ...at(20, 20), acc: 6, src: 'walk' }] }] }] }, 0);
-  assert.ok(!/지도 데이터 기준/.test(log[0]));
+  assert.ok(!/확인되지 않아/.test(log[0]));
 });
 
 test('버스: 하차 정류장 좌표가 없어도 사무실까지 남은 거리로 하차 준비 안내(자동 전환은 하지 않음)', () => {
@@ -261,4 +262,38 @@ test('진행 위치 저장·복원: 지도 앱을 다녀와도 처음으로 돌�
   assert.equal(e2.status().legIndex, 1); assert.equal(e2.status().stIdx, 1);
   assert.match(log[log.length - 1], /이어서 안내함. 나/);
   assert.equal(W.createEngine({ io }).snapshot(), null);
+});
+
+test('안내가 버려지면(말하는 중) 다음 위치 수신 때 다시 시도하고, 구간 첫 안내는 반드시 이어서 말함', () => {
+  const spoken = []; let busy = true;
+  const io = { speak: (s, prio) => { if (prio === 'normal' && busy) return false; spoken.push([prio, s]); return true; }, vibrate() {}, beep() {}, notify() {} };
+  let t = 3_000_000; const eng = W.createEngine({ io, now: () => t });
+  eng.start({ legs: [{ type: 'walk', title: 'x', intro: '소개.', points: [{ id: 'd', name: '정류장', kind: 'stop', ...at(0, 200) }] }] }, 0);
+  eng.onCompass(90); t += 1000; eng.onFix({ ...at(0, 0), acc: 5, heading: null, speed: 0, t });
+  assert.deepEqual(spoken.map((x) => x[0]), ['high', 'queue'], '첫 방향 안내는 소개 뒤 queue로');
+  // 걷는 중 주기 안내가 버려져도 다음 수신에서 다시 시도
+  for (let i = 1; i <= 70; i++) { t += 1000; eng.onCompass(90); eng.onFix({ ...at(0, i * 1.3), acc: 5, heading: 90, speed: 1.3, t }); }   // 91m 이동(정면 재안내 기준 80m 초과)
+  const n = spoken.length; busy = false;
+  t += 1000; eng.onFix({ ...at(0, 92.3), acc: 5, heading: 90, speed: 1.3, t });
+  assert.equal(spoken.length, n + 1, '말하기가 끝난 직후 밀린 안내가 나와야 함');
+});
+
+test('지하철에서 나온 직후 GPS 두절로 오인하지 않음, 역 세기 되돌리기', () => {
+  const log = []; let t = 4_000_000;
+  const io = { speak: (s) => { log.push(s); }, vibrate() {}, beep() {}, notify() {} };
+  const eng = W.createEngine({ io, now: () => t });
+  eng.start({ legs: [
+    { type: 'walk', title: '가', intro: '', points: [{ id: 'a', name: 'A', kind: 'entrance', ...at(0, 5) }] },
+    { type: 'subway', title: '나', intro: '', stations: ['x', 'y', 'z'] },
+    { type: 'walk', title: '다', intro: '', points: [{ id: 'b', name: 'B', kind: 'stop', ...at(0, 500) }] }] }, 0);
+  eng.onFix({ ...at(0, 5), acc: 5, heading: null, speed: 0, t });      // 입구 도착 → 지하철 구간
+  assert.equal(eng.status().legIndex, 1);
+  eng.next(); eng.prevLeg();
+  assert.match(log[log.length - 1], /한 역 되돌렸음. 현재 x역/); assert.equal(eng.status().stIdx, 0);
+  t += 20 * 60 * 1000; eng.next(); eng.next();                          // 20분 뒤 하차 → 도보 구간
+  assert.equal(eng.status().legIndex, 2);
+  const n = log.length; eng.onCompass(0);
+  assert.equal(log.length, n, '구간 진입 직후에는 GPS 두절 경고를 하지 않음');
+  t += 21000; eng.onCompass(0);
+  assert.match(log[log.length - 1], /아직 GPS 신호를 잡지 못했음/);
 });

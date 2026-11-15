@@ -11,7 +11,7 @@
 
   let data = null, route = null, started = false;
   let lastFix = null, rawFix = null, watchId = null, wake = null, smoothSin = 0, smoothCos = 0, hasCompass = false;
-  let actx = null;
+  let actx = null, batch = [], batchTimer = null;
 
   // ---------- 출력(음성/진동/비프/알림) ----------
   let koVoice = null;
@@ -22,15 +22,22 @@
   if ('speechSynthesis' in window) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
 
   const io = {
+    // 우선순위: high = 지금 말하던 것을 끊고 말함 / queue = 이어서 반드시 말함 / normal = 말하는 중이면 버림(false 반환)
     speak(text, prio) {
-      $('now').textContent = text;
-      if (!set.voice || !('speechSynthesis' in window)) return;
-      const busy = speechSynthesis.speaking || speechSynthesis.pending;
-      if (prio === 'normal' && busy) return;     // 말하는 중이면 일반 안내는 버림(낡은 거리 안내가 늦게 나오지 않게)
-      const say = () => W.spoken(text).split(/(?<=[.?!])\s+/).filter(Boolean).forEach((s) => {   // 문장 단위로 읽어 TTS가 중간에 끊기지 않게
+      const voiceOn = set.voice && 'speechSynthesis' in window;
+      const busy = voiceOn && (speechSynthesis.speaking || speechSynthesis.pending || batch.length > 0);
+      if (prio === 'normal' && busy) return false;
+      $('now').textContent = W.spoken(text);          // 화면낭독기가 읽는 문장도 낭독용으로 정리
+      if (!voiceOn) return true;
+      const utter = (t) => W.spoken(t).split(/(?<=[.?!])\s+/).filter(Boolean).forEach((s) => {   // 문장 단위로 읽어 중간에 끊기지 않게
         const u = new SpeechSynthesisUtterance(s); u.lang = 'ko-KR'; u.rate = set.rate; if (koVoice) u.voice = koVoice; speechSynthesis.speak(u);
       });
-      if (prio === 'high') { speechSynthesis.cancel(); setTimeout(say, 60); } else say();   // 취소 직후 바로 말하면 누락되는 기기가 있음
+      if (prio === 'high') {                           // 취소 직후 바로 말하면 누락되는 기기가 있어 60ms 뒤에 말함
+        speechSynthesis.cancel(); batch = [text]; clearTimeout(batchTimer);
+        batchTimer = setTimeout(() => { const b = batch; batch = []; b.forEach(utter); }, 60);
+      } else if (batch.length) batch.push(text);       // 대기 중인 high 뒤에 순서대로 이어 붙임(순서 뒤집힘 방지)
+      else utter(text);
+      return true;
     },
     vibrate(p) { if (set.vib && navigator.vibrate) navigator.vibrate(p); },
     beep(freq) {
@@ -67,6 +74,7 @@
   };
   const engine = W.createEngine({ io });
   const kf = W.createKalman();
+  let geoErr = { code: 0, t: 0 };
   const WL = window.WalkLearn;
   const LK = window.WalkLinks;
   const SD = window.WalkSeed;
@@ -83,7 +91,7 @@
       lastFix = kf.update(rawFix);       // 안내는 칼만 평활 값으로
       if (learner) learner.onFix(lastFix);
       engine.onFix(lastFix); render();
-    }, (e) => io.speak(e.code === 1 ? '위치 권한이 꺼져 있음. 설정에서 위치 권한을 허용해 주세요.' : e.code === 2 ? '위치를 잡을 수 없음. GPS를 켜고 하늘이 트인 곳으로 이동해 주세요.' : '위치 확인이 늦어지고 있음. 잠시 기다려 주세요.', 'high'),
+    }, (e) => { const t = Date.now(); if (geoErr.code === e.code && t - geoErr.t < 90000) return; geoErr = { code: e.code, t }; if (e.code === 3 && started && !['walk', 'bus'].includes((engine.status().leg || {}).type)) return; io.speak(e.code === 1 ? '위치 권한이 꺼져 있음. 설정에서 위치 권한을 허용해 주세요.' : e.code === 2 ? '위치를 잡을 수 없음. GPS를 켜고 하늘이 트인 곳으로 이동해 주세요.' : '위치 확인이 늦어지고 있음. 잠시 기다려 주세요.', 'queue'); },
     { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
   }
   async function startCompass() {
@@ -111,7 +119,17 @@
   async function loadData() {
     const saved = localStorage.getItem(LS_ROUTE);
     if (saved) { try { data = JSON.parse(saved); } catch (e) { data = null; } }
-    if (!data) data = await (await fetch('route.json', { cache: 'no-cache' })).json();
+    let fresh = null;
+    try { fresh = await (await fetch('route.json', { cache: 'no-cache' })).json(); } catch (e) { /* 오프라인 */ }
+    if (data && fresh && (fresh.version || 0) > (data.version || 0)) {     // 배포된 경로가 새 판이면 문구는 새 판으로, 기록한 위치는 지점 id로 옮김
+      const keep = {};
+      data.routes.forEach((rt) => { if (rt.home) keep[rt.id + ':home'] = rt.home; rt.legs.forEach((l, i) => { (l.points || []).forEach((q) => { keep[rt.id + ':' + q.id] = q; }); if (l.alight) keep[rt.id + ':alight' + i] = l.alight; if (l.learned) keep[rt.id + ':learned' + i] = l.learned; }); });
+      const carry = (dst, src) => { if (src && W.hasXY(src) && ((src.samples && src.samples.length) || !W.hasXY(dst))) ['lat', 'lng', 'samples', 'recAcc', 'weak', 'quarantine'].forEach((k) => { if (src[k] !== undefined) dst[k] = src[k]; }); };
+      fresh.routes.forEach((rt) => { if (keep[rt.id + ':home']) rt.home = keep[rt.id + ':home']; rt.legs.forEach((l, i) => { (l.points || []).forEach((q) => carry(q, keep[rt.id + ':' + q.id])); if (l.alight) carry(l.alight, keep[rt.id + ':alight' + i]); if (keep[rt.id + ':learned' + i]) l.learned = keep[rt.id + ':learned' + i]; }); });
+      data = fresh; localStorage.setItem(LS_ROUTE, JSON.stringify(data));
+    }
+    if (!data) data = fresh;
+    if (!data) throw new Error('경로 파일을 읽지 못함');
     const sel = $('routeSel'); sel.innerHTML = '';
     data.routes.forEach((r, i) => { const o = document.createElement('option'); o.value = i; o.textContent = r.name; sel.appendChild(o); });
     data.routes.forEach((rt) => rt.legs.forEach((l) => (l.points || []).forEach((p) => { if (W.hasXY(p) && !(p.samples && p.samples.length) && p.weak === undefined) p.weak = true; }))); // 출처를 모르는 좌표는 지도 기준(약함)으로 취급
@@ -242,12 +260,12 @@
     const need = route.legs.some((l) => (l.points || []).some((p) => !W.hasXY(p)));
     const last = +localStorage.getItem('walknav.seed.t') || 0;
     if (!force && (!need || Date.now() - last < 6 * 3600 * 1000)) return;
-    localStorage.setItem('walknav.seed.t', String(Date.now()));
     $('seedMsg').textContent = '지도 데이터를 가져오는 중임.';
     if (force) io.speak('지도 데이터로 출구와 정류장 위치를 가져오는 중임.', 'normal');
     let rep;
     try { rep = await SD.run({ fetch: window.fetch.bind(window), route, destination: data.destination }); }
-    catch (e) { $('seedMsg').textContent = '지도 데이터를 가져오지 못했음: ' + e.message; return; }
+    catch (e) { $('seedMsg').textContent = '지도 데이터를 가져오지 못했음: ' + e.message; if (force) io.speak('지도 데이터를 가져오지 못했음.', 'high'); return; }
+    if (rep.seeds.length || !rep.skipped.some((q) => /조회 실패/.test(q.reason))) localStorage.setItem('walknav.seed.t', String(Date.now()));   // 조회 자체가 실패했으면 다음에 다시 시도
     const notes = [];
     rep.seeds.forEach((s) => {
       const tgt = findById(route, s.id); if (!tgt) return;
@@ -263,7 +281,9 @@
     persist(); refreshRec();
     const msg = `지도 데이터로 ${rep.seeds.length}개 지점의 위치를 채웠고 ${rep.skipped.length}개는 애매하거나 없어 건너뜀.` + (notes.length ? ' 주의: ' + notes.join('. ') + '.' : '') + ' 지도 데이터 기준이라 오차가 있을 수 있음.';
     $('seedMsg').textContent = msg + (rep.skipped.length ? ' 건너뜀: ' + rep.skipped.map((q) => q.name).join(', ') : '');
-    if (rep.seeds.length || force) io.speak(msg, 'normal');
+    const still = route.legs.reduce((n, l) => n + (l.points || []).filter((q) => !W.hasXY(q)).length, 0);
+    if (rep.seeds.length || force) io.speak(msg, 'queue');
+    else if (still && !started) io.speak(`위치 정보가 없는 지점이 ${still}개 있음. 그 지점에서는 방향을 안내하지 못함.`, 'queue');   // 조용히 실패하지 않음
   }
   $('seedBtn').onclick = () => autoSeed(true);
 
@@ -322,7 +342,7 @@
     const m = W.robustFuse(tgt.samples);
     tgt.lat = m.lat; tgt.lng = m.lng; tgt.recAcc = Math.round(m.acc); markWeak(tgt);
     persist(); refreshRec(); $('shareBox').hidden = true;
-    io.speak(`${q.label} 위치를 저장했음. 걸어서 기록하면 더 정확해짐.`, 'high'); shared = null;
+    io.speak(`${q.label} 위치를 저장했음. 걸어서 기록하면 더 정확해짐.`, 'high'); shared = null; $('now').focus();
   };
   $('shareCancelBtn').onclick = () => { $('shareBox').hidden = true; shared = null; io.speak('저장하지 않았음.', 'high'); };
   (function readShareParams() {
@@ -405,11 +425,14 @@
   $('startBtn').onclick = async () => {
     route = data.routes[+$('routeSel').value];
     started = true; startGeo(); startCompass();
-    try { wake = await navigator.wakeLock.request('screen'); } catch (e) { io.speak('화면이 꺼지면 안내가 멈출 수 있음. 화면을 켜 두세요.', 'queue'); }
+    let wakeFail = false;
+    try { wake = await navigator.wakeLock.request('screen'); } catch (e) { wakeFail = true; }
     if (set.noti && 'Notification' in window && Notification.permission === 'default') await Notification.requestPermission();
     const prog = loadProg();
     if (prog && prog.routeId === route.id) engine.restore(route, prog); else engine.start(route, 0);
+    if (wakeFail) io.speak('화면이 꺼지면 안내가 멈출 수 있음. 화면을 켜 두세요.', 'queue');
     $('startBtn').hidden = true;   // 진행 중 실수로 눌러 처음으로 돌아가지 않게 숨김
+    $('now').focus();              // 숨긴 버튼에 있던 화면낭독기 포커스를 안내 영역으로 옮김
     refreshRec(); render();
   };
   $('restartBtn').onclick = () => {
@@ -419,11 +442,17 @@
   };
   $('repeatBtn').onclick = () => engine.repeat();
   $('now').onclick = () => engine.repeat();
-  $('nextBtn').onclick = () => { engine.next(); render(); };
   const armed = {};
-  const twice = (key, fn, msg) => () => { const t = Date.now(); if (armed[key] && t - armed[key] < 5000) { armed[key] = 0; fn(); render(); } else { armed[key] = t; io.speak(msg, 'high'); } };
-  $('prevBtn').onclick = twice('prev', () => engine.prevLeg(), '이전 단계로 돌아갑니다. 맞으면 5초 안에 한 번 더 누르세요.');
-  $('skipBtn').onclick = twice('skip', () => engine.skipLeg(), '이 단계를 건너뜁니다. 맞으면 5초 안에 한 번 더 누르세요.');
+  const twice = (key, fn, msg) => () => { const t = Date.now(); if (armed[key] && t - armed[key] < 15000) { armed[key] = 0; fn(); render(); } else { armed[key] = t; io.speak(msg, 'high'); } };
+  const confirmNext = twice('next', () => engine.next(), '안내 중인 지점을 건너뜁니다. 맞으면 한 번 더 누르세요.');
+  const doNext = () => {            // 지하철 역 세기, 버스 하차, 위치 정보 없는 지점은 한 번에. 안내 중인 도보 지점을 건너뛰는 것만 확인
+    const s = engine.status();
+    if (s.leg && s.leg.type === 'walk' && s.point && W.hasXY(s.point)) return confirmNext();
+    engine.next(); render();
+  };
+  $('nextBtn').onclick = doNext;
+  $('prevBtn').onclick = () => { const s = engine.status(); if (s.leg && s.leg.type === 'subway' && s.stIdx > 0) { engine.prevLeg(); render(); } else twice('prev', () => engine.prevLeg(), '이전 단계로 돌아갑니다. 맞으면 한 번 더 누르세요.')(); };
+  $('skipBtn').onclick = twice('skip', () => engine.skipLeg(), '이 단계를 건너뜁니다. 맞으면 한 번 더 누르세요.');
   $('shareBtn').onclick = async () => {
     if (!lastFix) return io.speak('아직 위치를 잡지 못했음', 'high');
     const url = `https://maps.google.com/?q=${lastFix.lat},${lastFix.lng}`;
@@ -440,7 +469,7 @@
       const t = ev.results[0][0].transcript;
       if (/다시|반복/.test(t)) engine.repeat();
       else if (/위치|도움/.test(t)) $('shareBtn').click();
-      else if (/다음|도착/.test(t)) engine.next();     // 되돌릴 수 없는 이전·건너뛰기는 음성 명령에서 제외, '역'만으로는 반응하지 않음(오인식 방지)
+      else if (/다음|도착/.test(t)) doNext();     // 되돌릴 수 없는 이전·건너뛰기는 음성 명령에서 제외, '역'만으로는 반응하지 않음(오인식 방지)
       else io.speak('명령을 이해하지 못했음. 다시, 다음, 위치 중에서 말씀해 주세요.', 'high');
       render();
     };
