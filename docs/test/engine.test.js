@@ -66,6 +66,7 @@ test('걸어서 접근하면 도착 안내 후 다음 구간으로', () => {
   fix(at(0, 0));
   fix(at(-15, -20), { speed: 1.3, heading: 217 });
   fix(at(-28, -38), { speed: 1.3, heading: 217 });
+  fix(at(-29, -39), { speed: 1.3, heading: 217, dt: 1000 });   // 도착은 연속 2회 측정으로 확정
   assert.ok(log.some((s) => /정류장 도착\. 탑승 준비/.test(s)));
   assert.equal(eng.status().legIndex, 1);
 });
@@ -229,9 +230,7 @@ test('버스: 하차 정류장 좌표가 없어도 사무실까지 남은 거리
     { type: 'bus', title: '버스', intro: '', alight: { name: '하차 정류장' } },
     { type: 'walk', title: '도보 400미터', intro: '', points: [{ id: 'd', name: '사무실', kind: 'dest', ...at(0, 0) }] }] }, 0);
   for (const e of [1400, 900, 600, 400, 350]) { t0.v += 3000; eng.onFix({ ...at(0, e), acc: 8, heading: 270, speed: 8, t: t0.v }); } // 사무실까지 동쪽 거리
-  assert.ok(log.some((s) => /하차 준비/.test(s)), log.join('|'));
-  assert.ok(log.some((s) => /하차벨/.test(s)));
-  assert.ok(log.some((s) => /안내방송으로 정류장 이름을 확인/.test(s)));
+  assert.equal(log.filter((s) => /하차 정류장이 가까움.*안내방송/.test(s)).length, 1, log.join('|'));   // 위치를 모르므로 하차 시점을 단정하지 않고 한 번만 알림
   assert.equal(eng.status().legIndex, 0, '좌표 없이 자동으로 다음 구간으로 넘기지 않음');
 });
 
@@ -287,6 +286,7 @@ test('지하철에서 나온 직후 GPS 두절로 오인하지 않음, 역 세�
     { type: 'subway', title: '나', intro: '', stations: ['x', 'y', 'z'] },
     { type: 'walk', title: '다', intro: '', points: [{ id: 'b', name: 'B', kind: 'stop', ...at(0, 500) }] }] }, 0);
   eng.onFix({ ...at(0, 5), acc: 5, heading: null, speed: 0, t });      // 입구 도착 → 지하철 구간
+  eng.onFix({ ...at(0, 5), acc: 5, heading: null, speed: 0, t });      // 연속 2회 측정으로 확정
   assert.equal(eng.status().legIndex, 1);
   eng.next(); eng.prevLeg();
   assert.match(log[log.length - 1], /한 역 되돌렸음. 현재 x역/); assert.equal(eng.status().stIdx, 0);
@@ -296,4 +296,48 @@ test('지하철에서 나온 직후 GPS 두절로 오인하지 않음, 역 세�
   assert.equal(log.length, n, '구간 진입 직후에는 GPS 두절 경고를 하지 않음');
   t += 21000; eng.onCompass(0);
   assert.match(log[log.length - 1], /아직 GPS 신호를 잡지 못했음/);
+});
+
+test('안전 재검증 회귀: 꺾는 곳 건너뛰기는 가까이 왔다가 멀어질 때만, 알림과 함께', () => {
+  const log = []; let t = 6_000_000;
+  const io = { speak: (s) => { log.push(s); }, vibrate() {}, beep() {}, notify() {} };
+  const mkRoute = () => ({ legs: [{ type: 'walk', title: 'x', intro: '', learned: { text: 'y' }, points: [
+    { id: 'c', name: '꺾는 곳', kind: 'turn', turn: 'right', radius: 8, ...at(100, 0), weak: false, samples: [{ ...at(100, 0), acc: 8, src: 'walk' }] },
+    { id: 'e', name: '정류장', kind: 'stop', radius: 8, ...at(100, 100), weak: false, samples: [{ ...at(100, 100), acc: 6, src: 'walk' }] }] }] });
+  // (1) 꺾는 곳 35m 앞에서 반대로 20m 걸어도 건너뛰지 않음
+  let eng = W.createEngine({ io, now: () => t }); eng.start(mkRoute(), 0);
+  for (const n of [65, 62, 58, 54, 50, 46, 45]) { t += 1000; eng.onFix({ ...at(n, 0), acc: 5, heading: 180, speed: 1.3, t }); }
+  assert.equal(eng._S.pi, 0, '멀리서 반대로 걸은 것만으로 꺾는 곳을 건너뛰면 안 됨');
+  // (2) 12m 옆을 스쳐 지나가 계속 멀어지면 알리고 다음 지점으로
+  log.length = 0; eng = W.createEngine({ io, now: () => t }); eng.start(mkRoute(), 0);
+  for (let n = 70; n <= 135; n += 1.3) { t += 1000; eng.onFix({ ...at(n, 12), acc: 5, heading: 0, speed: 1.3, t }); }
+  assert.equal(eng._S.pi, 1); assert.ok(log.some((s) => /꺾는 곳을 지나친 것으로 보여 다음 지점으로 안내함/.test(s)));
+});
+
+test('안전 재검증 회귀: 지하철 하차 후 첫 지점이 500m 넘게 떨어지면 역 확인 안내, 집에서 출발하는 구간에는 적용하지 않음', () => {
+  const log = []; let t = 7_500_000;
+  const io = { speak: (s) => { log.push(s); }, vibrate() {}, beep() {}, notify() {} };
+  const exit = { id: 'x', name: '6번 출구', kind: 'exit', radius: 8, ...at(0, 0), weak: false, samples: [{ ...at(0, 0), acc: 5, src: 'walk' }] };
+  const eng = W.createEngine({ io, now: () => t });
+  eng.start({ legs: [{ type: 'subway', title: '지하철', intro: '', stations: ['a', 'b'] }, { type: 'walk', title: '도보', intro: '', learned: { text: 'y' }, points: [exit] }] }, 0);
+  eng.next();                                                             // 하차 처리 → 도보 구간
+  t += 1000; eng.onFix({ ...at(1000, 0), acc: 8, heading: null, speed: 0, t });   // 실제로는 1km 떨어진 다른 역
+  assert.ok(log.some((s) => /1킬로미터 떨어져 있음. 내린 역이 맞는지/.test(s)), log.join('|'));
+  assert.ok(!log.some((s) => /6번 출구까지/.test(s)), '역이 다를 수 있는데 일반 방향 안내를 하면 안 됨');
+  log.length = 0;
+  const e2 = W.createEngine({ io, now: () => t });
+  e2.start({ legs: [{ type: 'walk', title: '집에서 역까지', intro: '', learned: { text: 'y' }, points: [exit] }] }, 0);
+  t += 1000; e2.onFix({ ...at(749, 0), acc: 8, heading: null, speed: 0, t });
+  assert.ok(!log.some((s) => /내린 역이 맞는지/.test(s)));
+});
+
+test('안전 재검증 회귀: 추정 오차가 큰 지점(recAcc>20)은 약한 좌표로 취급, 약한 목적지는 30m 앞에서 안내를 끝내지 않음', () => {
+  const log = []; let t = 8_500_000;
+  const io = { speak: (s) => { log.push(s); }, vibrate() {}, beep() {}, notify() {} };
+  const eng = W.createEngine({ io, now: () => t });
+  eng.start({ legs: [{ type: 'walk', title: '도보', intro: '', points: [{ id: 'd', name: '사무실', kind: 'dest', radius: 8, ...at(0, 100), weak: false, recAcc: 97 }] }] }, 0);
+  for (let e = 40; e <= 80; e += 1.3) { t += 1000; eng.onFix({ ...at(0, e), acc: 5, heading: 90, speed: 1.3, t }); }
+  assert.equal(eng.status().legIndex, 0, '20m 앞에서 목적지 도착으로 끝내면 안 됨');
+  assert.ok(log.some((s) => /사무실 부근임/.test(s)));
+  assert.ok(log.some((s) => /대략/.test(s)));
 });

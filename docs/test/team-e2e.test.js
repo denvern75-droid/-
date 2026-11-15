@@ -210,7 +210,7 @@ test('S4 경로 이탈 → 15초 내 경고 → 복귀 확인 → 도착', () =>
     x.walk(0, x.st.e + 20, { maxSec: 60, until: () => x.st.n < 3 });
     const onRouteAt = x.now();
     x.walk(0, 150, { maxSec: 200, until: () => x.legIndex() === 1 });
-    x.stand(3);   // 설계 변경(검증 후 합의): 스치는 GPS 잡음으로 인한 거짓 도착(S3)을 막으려고 도착 확정에 최대 3초가 걸림. 정류장에 닿아 멈춰 서는 시간으로 허용
+    x.stand(2);   // 도착은 멈춰 선 뒤 연속 2회 측정(약 2초)으로 확정함. 걷는 중 스치는 오차로 거짓 도착(S3)하지 않게 하기 위한 설계
     assert.equal(x.legIndex(), 1, '복귀 후 도착 못함\n  ' + x.dump());
     const warnsAfterBack = x.log.filter((l) => l.t > onRouteAt + 5000 && /벗어났음/.test(l.text));
     assert.equal(warnsAfterBack.length, 0, '복귀 후에도 이탈 경고: ' + warnsAfterBack.map((l) => l.text).join('|'));
@@ -258,14 +258,17 @@ test('S5 지도 좌표 25m 어긋남: 실제 정류장 앞에서 도착 판정 �
   });
 });
 
-test('S5-b 지도 기준(weak) 지점의 도착 반경은 지도 오차(≈30m)를 반영해야 함', () => {
+test('S5-b 지도 기준(weak) 지점: 30m 안에서는 일찍 도착 처리하지 않고 부근임을 알린 뒤 계속 안내, 다음 버튼으로 진행', () => {
+  // 설계 변경(안전 재검증 지적 4·D): 반경 30m 자동 도착은 실제 정류장 64m 전에 도착 처리하고 침묵하는 위험이 있어 폐기함
   const x = sim(1);
   const p = pt('s', '정류장', 'stop', 0, 100, { weak: true, samples: [{ ...at(0, 100), acc: 30, src: 'osm' }] });
   delete p.radius;
   x.eng.start({ legs: [walkLeg('x', [p]), walkLeg('y', [pt('d', '끝', 'dest', 0, 300)])] }, 0);
-  // 실제 정류장이 지도점에서 20m 떨어진 곳에 있고 이용자가 그 위에 정확히 서 있음(GPS 잡음 거의 없음)
   x.eng.onFix({ ...at(0, 80), acc: 4, heading: 90, speed: 1.3, t: 1 });
-  assert.equal(x.legIndex(), 1, '지도점에서 20m(지도 오차 30m 이내) 이내인데 도착 판정 안 됨: 반경 ' + Math.max(p.radius || 12, 4));
+  assert.equal(x.legIndex(), 0, '지도 기준 지점 20m 앞에서 자동으로 다음 구간으로 넘어가면 안 됨');
+  assert.ok(x.log.some((l) => /부근임.*다음 버튼/.test(l.text)), '부근 안내 없음');
+  x.eng.next();
+  assert.equal(x.legIndex(), 1);
 });
 
 // =====================================================================
@@ -297,7 +300,8 @@ test('S6-a 하차 좌표 없음(우회 보행, 직선 340m): 3단계 안내가 �
     const stopE = 6000;                                // 실제 하차 정류장
     x.eng.start(busRoute(340, { name: '하차 정류장' }), 0);
     const finalAt = rideBus(x, 600, stopE);
-    for (const re of [/하차 준비/, /하차벨/, /안내방송/]) assert.equal(x.log.filter((l) => re.test(l.text)).length, 1, `${re} 횟수\n  ` + x.dump());
+    // 설계 변경(안전 재검증 지적 3): 정류장 위치를 모르는데 3단계로 '내리세요'까지 말하면 수백 미터 일찍 나오므로, 범위에 들어설 때 한 번만 알림
+    assert.equal(x.log.filter((l) => /하차 정류장이 가까움.*안내방송.*하차벨/.test(l.text)).length, 1, '하차 안내 횟수\n  ' + x.dump());
     assert.ok(finalAt && finalAt.e <= stopE - 30, `내리라는 안내가 늦음: 정류장 ${finalAt ? stopE - finalAt.e : '-'}m 전`);
     assert.equal(x.legIndex(), 0, '자동 전환하면 안 됨');
     x.stand(3);

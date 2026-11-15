@@ -132,7 +132,7 @@
     if (!data) throw new Error('경로 파일을 읽지 못함');
     const sel = $('routeSel'); sel.innerHTML = '';
     data.routes.forEach((r, i) => { const o = document.createElement('option'); o.value = i; o.textContent = r.name; sel.appendChild(o); });
-    data.routes.forEach((rt) => rt.legs.forEach((l) => (l.points || []).forEach((p) => { if (W.hasXY(p) && !(p.samples && p.samples.length) && p.weak === undefined) p.weak = true; }))); // 출처를 모르는 좌표는 지도 기준(약함)으로 취급
+    data.routes.forEach((rt) => rt.legs.forEach((l) => (l.points || []).forEach((p) => { if (W.hasXY(p) && !p.auto && !(p.samples && p.samples.length) && p.weak === undefined) p.weak = true; }))); // 출처를 모르는 좌표는 지도 기준(약함)으로 취급
     route = data.routes[0];
     refreshRec(); refreshStartBtn();
   }
@@ -209,7 +209,7 @@
     if (W.hasXY(tgt)) {     // 기존 위치와 크게 다른 학습 값은 오감지일 수 있어 병합하지 않고 보류함
       const walkedBefore = tgt.samples.some((q) => !q.src || q.src === 'walk');
       const dd = W.dist(tgt, e);
-      if (dd > (walkedBefore ? 100 : 150)) {
+      if (dd > (walkedBefore ? 60 : 80)) {
         (tgt.quarantine = tgt.quarantine || []).push({ lat: e.lat, lng: e.lng, acc: e.acc, t: Date.now() }); persist();
         io.speak(`${tgt.name || '이'} 지점 기록이 기존 위치와 ${W.fmtDist(dd)} 달라 반영하지 않고 보류했음.`, 'queue'); return;
       }
@@ -223,7 +223,7 @@
     const l = route.legs[e.legIndex]; if (!l || !l.points) return;
     l.points = l.points.filter((p) => !p.auto);            // 이전 자동 꺾는 지점 교체
     const last = l.points.pop();
-    e.turns.forEach((t, i) => l.points.push({ id: `auto-${e.legIndex}-${i}`, auto: true, name: '꺾는 곳', kind: 'turn', radius: 8, lat: t.lat, lng: t.lng,
+    e.turns.forEach((t, i) => l.points.push({ id: `auto-${e.legIndex}-${i}`, auto: true, weak: false, name: '꺾는 곳', kind: 'turn', radius: 8, lat: t.lat, lng: t.lng, samples: [{ lat: t.lat, lng: t.lng, acc: 8, t: Date.now(), src: 'walk' }],
       turn: t.turn, angle: t.angle,
       say: `${t.turn === 'left' ? '왼쪽' : '오른쪽'}으로 약 ${t.angle}도 꺾기. 이후 ${W.fmtDist(t.nextLen)} 직진.` }));
     l.points.push(last);
@@ -323,7 +323,7 @@
     let best = 0, bs = -1, second = -1;
     const ph = document.createElement('option'); ph.value = -1; ph.textContent = '지점을 선택해 주세요'; sel.appendChild(ph); // 직접 고르기 전에는 저장 불가
     pts.forEach((q, i) => { const o = document.createElement('option'); o.value = i; o.textContent = q.label; sel.appendChild(o); const sc = LK.similarity(r.name, q.label); if (sc > bs) { second = bs; bs = sc; best = i; } else if (sc > second) second = sc; });
-    const sure = bs >= 0.5 && bs - second >= 0.15;   // 출구와 정류장처럼 이름이 비슷한 후보가 여럿이면 자동 선택하지 않음
+    const sure = bs >= 0.95 && bs - second >= 0.15;   // 이름이 사실상 같을 때만 자동 선택('금호역'만으로 '금호역 1번 출구'를 고르지 않음)   // 출구와 정류장처럼 이름이 비슷한 후보가 여럿이면 자동 선택하지 않음
     if (sure) sel.value = best;
     $('shareSaveBtn').hidden = false; sel.hidden = false;
     const nm = r.name ? r.name + ', ' : '';
@@ -374,7 +374,7 @@
       p.samples.push(avg);
       // 2) 여러 번 기록: 기록 간 오차는 독립에 가까우므로 융합하면 오차가 줄어듦
       const m = W.robustFuse(p.samples);
-      p.lat = m.lat; p.lng = m.lng; p.recAcc = Math.round(m.acc); p.weak = false;
+      p.lat = m.lat; p.lng = m.lng; p.recAcc = Math.round(m.acc); p.weak = !!m.conflict;
       persist(); refreshRec();
       let msg = `${p.name || '지점'} 위치를 저장했음. ${p.samples.length}회 기록, 추정 오차 약 ${Math.round(m.acc)}미터.`;
       if (m.rejected) msg += ` 튀는 기록 ${m.rejected}건은 제외했음.`;
@@ -447,7 +447,7 @@
   const confirmNext = twice('next', () => engine.next(), '안내 중인 지점을 건너뜁니다. 맞으면 한 번 더 누르세요.');
   const doNext = () => {            // 지하철 역 세기, 버스 하차, 위치 정보 없는 지점은 한 번에. 안내 중인 도보 지점을 건너뛰는 것만 확인
     const s = engine.status();
-    if (s.leg && s.leg.type === 'walk' && s.point && W.hasXY(s.point)) return confirmNext();
+    if (s.leg && s.leg.type === 'walk' && s.point && W.hasXY(s.point) && !s.near) return confirmNext();   // '부근' 안내를 받은 뒤에는 찾았다는 뜻이므로 한 번에
     engine.next(); render();
   };
   $('nextBtn').onclick = doNext;
@@ -469,7 +469,7 @@
       const t = ev.results[0][0].transcript;
       if (/다시|반복/.test(t)) engine.repeat();
       else if (/위치|도움/.test(t)) $('shareBtn').click();
-      else if (/다음|도착/.test(t)) doNext();     // 되돌릴 수 없는 이전·건너뛰기는 음성 명령에서 제외, '역'만으로는 반응하지 않음(오인식 방지)
+      else if (/다음/.test(t)) doNext();     // 되돌릴 수 없는 이전·건너뛰기는 음성 명령에서 제외, '역'만으로는 반응하지 않음(오인식 방지)
       else io.speak('명령을 이해하지 못했음. 다시, 다음, 위치 중에서 말씀해 주세요.', 'high');
       render();
     };
@@ -494,6 +494,6 @@
 
   loadData().then(() => autoSeed(false)).catch((e) => { $('now').textContent = '경로를 불러오지 못했음: ' + e.message; });
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
-  setInterval(() => { if (started) render(); }, 1000);
+  setInterval(() => { if (started) { engine.tick(); render(); } }, 1000);   // GPS 두절 감지는 나침반 이벤트가 없어도 동작해야 함
   window.__walknav = { engine, get route() { return route; }, feed: (f) => { lastFix = f; if (learner) learner.onFix(f); engine.onFix(f); render(); } };
 })();

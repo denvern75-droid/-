@@ -17,7 +17,9 @@ test('공유 해석: 좌표가 들어 있는 형식', () => {
   let r = L.parseShared('https://map.kakao.com/link/map/구로디지털단지역 6번 출구,37.485013,126.902762');
   assert.ok(r.ok && Math.abs(r.lat - 37.485013) < 1e-9 && r.source === 'kakao', JSON.stringify(r));
   r = L.parseShared('https://www.google.com/maps/place/x/@37.4852,126.9015,17z/data=!3m1');
-  assert.ok(r.ok && r.source === 'google');
+  assert.equal(r.ok, false, '@좌표는 지도 화면 중심이라 받지 않음');
+  r = L.parseShared('https://www.google.com/maps/place/x/@37.48,126.90,17z/data=!3d37.4852!4d126.9015');
+  assert.ok(r.ok && r.source === 'google' && Math.abs(r.lat - 37.4852) < 1e-9);
   r = L.parseShared('https://maps.google.com/?q=37.5486,127.0162');
   assert.ok(r.ok && Math.abs(r.lng - 127.0162) < 1e-9);
   r = L.parseShared('37.548681, 127.016205');              // 구글 지도에서 좌표 복사

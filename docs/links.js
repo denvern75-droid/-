@@ -63,13 +63,14 @@
     if ((m = text.match(/map\.kakao\.com\/link\/(?:map|to|from)\/([^,\/]+),(-?\d+\.\d+),(-?\d+\.\d+)/))) { out.name = m[1]; if (take(m[2], m[3], 'kakao')) return fin(out); }
     // 2) 구글: @lat,lng / !3dLAT!4dLNG / q=,query=,ll=,center=,destination= lat,lng
     if ((m = text.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/)) && take(m[1], m[2], 'google')) return fin(out);
-    if ((m = text.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/)) && take(m[1], m[2], 'google')) return fin(out);
+    // 구글 주소의 @lat,lng 는 장소가 아니라 지도 화면 중심이므로 좌표로 받지 않음
     if ((m = text.match(/[?&](?:q|query|ll|center|destination|daddr)=(-?\d+\.\d+),\s*(-?\d+\.\d+)/)) && take(m[1], m[2], 'google')) return fin(out);
     // 3) 네이버: lat=..&lng=.. / c=lng,lat,zoom 형태 추정
     if ((m = text.match(/[?&]lat=(-?\d+\.\d+)[^#\s]*?[?&]lng=(-?\d+\.\d+)/)) && take(m[1], m[2], 'naver')) return fin(out);
     if ((m = text.match(/[?&]c=(-?\d+\.\d+),(-?\d+\.\d+)(?:,|&|$)/)) && take(m[2], m[1], 'naver')) return fin(out);
     // 4) 일반 좌표 문자열: "37.5486, 127.0162" (구글 지도에서 좌표를 복사한 경우)
-    for (const g of text.matchAll(/(-?\d{2,3}\.\d{4,})\s*[,\s]\s*(-?\d{2,3}\.\d{4,})/g)) { if (take(g[1], g[2], 'text')) return fin(out); }
+    const plain = text.replace(/@-?\d+\.\d+,-?\d+\.\d+(,[\d.]+z)?/g, ' ');   // 지도 화면 중심(@) 부분은 제외
+    for (const g of plain.matchAll(/(-?\d{2,3}\.\d{4,})\s*[,\s]\s*(-?\d{2,3}\.\d{4,})/g)) { if (take(g[1], g[2], 'text')) return fin(out); }
     // 5) 좌표 없음
     out.reason = SHORT.test(text) ? 'short' : 'none';
     out.name = leadName(text);

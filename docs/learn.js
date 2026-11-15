@@ -85,7 +85,7 @@
   function createLearner(o) {
     const legs = o.route.legs, now = o.now || (() => Date.now());
     const say = o.say || (() => {}), onPoint = o.onPoint || (() => {}), onLeg = o.onLegDone || (() => {}), onDone = o.onDone || (() => {});
-    let li = -1, phase = 'idle', emitId = null;
+    let li = -1, phase = 'idle', emitId = null, saidFar = false;
     let buf = [], lastGood = null, lastGoodAt = 0, lost = false, sawLoss = false, enteredAt = 0;
     let sm = null, smT = 0, smBuf = [];
     let trail = [], walked = 0, pend = [], walkRunStart = null, boardPt = null, lastFastT = 0, fastRunStart = null;
@@ -129,7 +129,7 @@
         say(`${l.title}. 지하철을 타세요. 지상으로 나와 걸으면 출구 위치가 자동으로 기록됨.`);
       }
     }
-    function startWalk(pt) { phase = 'walking'; trail = [pt]; walked = 0; }
+    function startWalk(pt) { phase = 'walking'; trail = [pt]; walked = 0; saidFar = false; }
     function nextWalkIndex(from) { for (let j = from + 1; j < legs.length; j++) if (legs[j].type === 'walk') return j; return -1; }
 
     function finishWalk(endPt) {
@@ -188,7 +188,9 @@
           const dcl = declared(l);
           const need = dcl ? dcl * C.minLegFrac : 40;
           const st = stationaryFor(last.kind === 'dest' ? C.destSec : C.stopSec);
-          if (st && walked >= need && !(hasXY(last) && W.dist(st, last) > 120)) {   // 알려진 위치에서 120m 넘게 떨어진 곳의 정지(신호 대기 등)는 기록하지 않음
+          const farKnown = st && hasXY(last) && W.dist(st, last) > 60;   // 알려진 위치에서 60m 넘게 떨어진 정지(신호 대기 등)는 기록하지 않음
+          if (farKnown && walked >= need && !saidFar) { saidFar = true; say(`${last.name} 위치로 기록하지 않았음. 저장된 위치와 ${W.fmtDist(W.dist(st, last))} 다름. 실제로 도착한 것이면 화면의 여기 저장 기능으로 고칠 수 있음.`); }
+          if (st && walked >= need && !farKnown) {   // 알려진 위치에서 120m 넘게 떨어진 곳의 정지(신호 대기 등)는 기록하지 않음
             onPoint({ legIndex: li, id: last.id, lat: st.lat, lng: st.lng, acc: st.acc });
             say(`${last.name} 위치를 기록했음.`);
             finishWalk(st);
