@@ -10,7 +10,7 @@
   const saveSet = () => localStorage.setItem(LS_SET, JSON.stringify(set));
 
   let data = null, route = null, started = false;
-  let lastFix = null, watchId = null, wake = null, smoothSin = 0, smoothCos = 0, hasCompass = false;
+  let lastFix = null, rawFix = null, watchId = null, wake = null, smoothSin = 0, smoothCos = 0, hasCompass = false;
   let actx = null;
 
   // ---------- 출력(음성/진동/비프/알림) ----------
@@ -48,15 +48,17 @@
     onLegChange() { refreshRec(); },
   };
   const engine = W.createEngine({ io });
+  const kf = W.createKalman();
 
   // ---------- 센서 ----------
   function startGeo() {
     if (watchId != null) return;
     if (!navigator.geolocation) { io.speak('이 기기는 위치 기능을 지원하지 않음', 'high'); return; }
     watchId = navigator.geolocation.watchPosition((p) => {
-      lastFix = { lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy,
+      rawFix = { lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy,
         heading: p.coords.heading, speed: p.coords.speed || 0, t: Date.now() };
-      recSample(lastFix);
+      recSample(rawFix);                 // 기록은 원시 값으로(이중 평활 방지)
+      lastFix = kf.update(rawFix);       // 안내는 칼만 평활 값으로
       engine.onFix(lastFix); render();
     }, (e) => io.speak('위치 오류: ' + e.message + '. 위치 권한과 GPS를 확인해 주세요.', 'high'),
     { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
@@ -109,11 +111,18 @@
       const row = document.createElement('div'); row.className = 'pt';
       const ok = W.hasXY(p);
       const info = document.createElement('div');
-      info.innerHTML = `<b>${p.name}</b><br><small>${l.title}</small><br><span class="${ok ? 'ok' : 'bad'}">${ok ? '저장됨 ' + p.lat.toFixed(6) + ', ' + p.lng.toFixed(6) : '좌표 없음'}</span>`;
+      const n = (p.samples || []).length;
+      const sp = n > 1 ? ` · 편차 ${Math.round(W.robustFuse(p.samples).spread)}m` : '';
+      info.innerHTML = `<b>${p.name}</b><br><small>${l.title}</small><br><span class="${ok ? 'ok' : 'bad'}">${ok ? '저장됨 ' + p.lat.toFixed(6) + ', ' + p.lng.toFixed(6) + ' (' + n + '회' + sp + ')' : '좌표 없음'}</span>`;
       const b = document.createElement('button'); b.textContent = '여기 저장'; b.style.width = '140px';
-      b.setAttribute('aria-label', `${p.name} 위치를 현재 위치로 저장`);
+      b.setAttribute('aria-label', `${p.name} 위치를 현재 위치로 기록. 현재 ${n}회 기록됨`);
       b.onclick = () => recordPoint(p);
-      row.append(info, b); box.appendChild(row);
+      const box2 = document.createElement('div'); box2.style.cssText = 'display:flex;flex-direction:column;gap:6px';
+      box2.appendChild(b);
+      if (n) { const c = document.createElement('button'); c.textContent = '기록 지우기'; c.className = 'danger'; c.style.width = '140px'; c.style.minHeight = '48px';
+        c.onclick = () => { if (confirm(p.name + ' 기록을 지울까요?')) { p.samples = []; p.lat = null; p.lng = null; persist(); refreshRec(); } };
+        box2.appendChild(c); }
+      row.append(info, box2); box.appendChild(row);
     });
     // 하차 정류장 좌표(버스 구간)
     route.legs.forEach((l) => {
@@ -129,27 +138,43 @@
   }
   function recordPoint(p) {
     if (!lastFix) { startGeo(); io.speak('GPS를 잡는 중임. 잠시 후 다시 눌러주세요.', 'high'); return; }
-    recTarget = p; recBuf = []; io.speak('위치 기록 중. 8초간 가만히 서 계세요.', 'high');
+    recTarget = p; recBuf = (rawFix && Date.now() - rawFix.t < 5000 && rawFix.acc <= 40) ? [rawFix] : []; io.speak('위치 기록 중. 8초간 가만히 서 계세요.', 'high');
     clearTimeout(recTimer);
     recTimer = setTimeout(() => {
-      const use = recBuf.slice().sort((a, b) => a.acc - b.acc).slice(0, Math.max(3, Math.ceil(recBuf.length / 2)));
-      if (!use.length) { io.speak('GPS가 부정확해 저장하지 못했음. 하늘이 트인 곳에서 다시 시도해 주세요.', 'high'); recTarget = null; return; }
-      p.lat = use.reduce((s, f) => s + f.lat, 0) / use.length;
-      p.lng = use.reduce((s, f) => s + f.lng, 0) / use.length;
-      p.recAcc = Math.round(use.reduce((s, f) => s + f.acc, 0) / use.length);
+      let buf = recBuf.slice();
+      if (!buf.length && rawFix && Date.now() - rawFix.t < 60000 && rawFix.acc <= 40) buf = [rawFix]; // 갱신이 드문 환경 대비
+      if (!buf.length) { io.speak('GPS가 부정확해 저장하지 못했음. 하늘이 트인 곳에서 다시 시도해 주세요.', 'high'); recTarget = null; return; }
+      // 1) 한 번의 기록(8초): 이상치 제거 + 오차 가중 평균. 같은 순간의 오차는 서로 닮아 있으므로 오차값은 줄이지 않고 중앙 오차를 사용
+      const one = W.robustFuse(buf);
+      const avg = { lat: one.lat, lng: one.lng, acc: W.median(buf.map((f) => f.acc)), t: Date.now() };
+      if (avg.acc > W.REC.rejectAcc) {
+        io.speak(`오차가 약 ${Math.round(avg.acc)}미터로 너무 큼. 하늘이 트인 곳에서 잠시 후 다시 기록해 주세요.`, 'high'); recTarget = null; return;
+      }
+      p.samples = p.samples || [];
+      const base = p.samples.length ? W.robustFuse(p.samples) : (W.hasXY(p.ref) ? p.ref : null);
+      const shift = base ? W.dist(base, avg) : 0;
+      p.samples.push(avg);
+      // 2) 여러 번 기록: 기록 간 오차는 독립에 가까우므로 융합하면 오차가 줄어듦
+      const m = W.robustFuse(p.samples);
+      p.lat = m.lat; p.lng = m.lng; p.recAcc = Math.round(m.acc);
       persist(); refreshRec();
-      io.speak(`${p.name || '지점'} 위치를 저장했음. 평균 오차 약 ${p.recAcc}미터.`, 'high');
+      let msg = `${p.name || '지점'} 위치를 저장했음. ${p.samples.length}회 기록, 추정 오차 약 ${Math.round(m.acc)}미터.`;
+      if (m.rejected) msg += ` 튀는 기록 ${m.rejected}건은 제외했음.`;
+      if (avg.acc > W.REC.warnAcc) msg += ' 이번 측정 오차가 큰 편이니 다른 시간에 한 번 더 기록하길 권함.';
+      if (shift > W.REC.warnShiftM) msg += ` 주의, 이전 기록과 약 ${Math.round(shift)}미터 어긋남. 서 있는 위치를 확인하고 다시 기록하세요.`;
+      else if (p.samples.length < 2) msg += ' 정확도를 위해 다른 날 한 번 더 기록하길 권함.';
+      io.speak(msg, 'high');
       recTarget = null;
     }, 8000);
   }
   $('addPtBtn').onclick = () => {
-    if (!lastFix) return io.speak('GPS가 아직 없음', 'high');
+    if (!rawFix) return io.speak('GPS가 아직 없음', 'high');
     const s = engine.status(); const l = s.leg;
     if (!l || l.type !== 'walk') return io.speak('도보 구간에서만 지점을 추가할 수 있음. 먼저 안내를 시작하고 도보 구간으로 이동하세요.', 'high');
     const name = prompt('지점 이름 (예: 횡단보도 앞, 골목 꺾는 곳)', '꺾는 지점'); if (!name) return;
     const kind = prompt('종류: turn(꺾는 곳) / crossing(횡단보도) 중 입력', 'turn') || 'turn';
     const say = prompt('도착 시 읽어줄 안내 (예: 오른쪽으로 꺾어 직진)', '') || '';
-    const np = { id: 'u' + Date.now(), name, kind, radius: 8, say, lat: lastFix.lat, lng: lastFix.lng, recAcc: Math.round(lastFix.acc) };
+    const np = { id: 'u' + Date.now(), name, kind, radius: 8, say, lat: rawFix.lat, lng: rawFix.lng, recAcc: Math.round(rawFix.acc), samples: [{ lat: rawFix.lat, lng: rawFix.lng, acc: rawFix.acc, t: Date.now() }] };
     const idx = Math.max(0, engine._S.pi);
     l.points.splice(idx, 0, np); persist(); refreshRec();
     io.speak(`${name} 지점을 추가했음`, 'high');

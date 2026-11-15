@@ -75,6 +75,113 @@
     return deg(h);
   }
 
+  // ---------- 다회 기록 보정 ----------
+  function median(a) {
+    const b = a.slice().sort((x, y) => x - y), n = b.length;
+    return n % 2 ? b[(n - 1) / 2] : (b[n / 2 - 1] + b[n / 2]) / 2;
+  }
+  // 샘플({lat,lng,acc}) 여러 개의 성분별 중앙값. 이상치에 강함
+  function medianPoint(samples) {
+    return { lat: median(samples.map((q) => q.lat)), lng: median(samples.map((q) => q.lng)), acc: median(samples.map((q) => q.acc || 0)) };
+  }
+  // 중앙값에서 가장 먼 샘플까지의 거리(m)
+  function spreadM(samples) {
+    const m = medianPoint(samples);
+    return samples.reduce((mx, q) => Math.max(mx, dist(m, q)), 0);
+  }
+  const REC = { rejectAcc: 25, warnAcc: 15, warnShiftM: 30 };
+
+  // ---------- 정밀 보정: 강건 융합 + 칼만 필터 ----------
+  const MPD = (Math.PI * R) / 180; // 위도 1도 = MPD 미터
+  const toLocal = (ref, q) => ({ x: (q.lng - ref.lng) * MPD * Math.cos(rad(ref.lat)), y: (q.lat - ref.lat) * MPD });
+  const fromLocal = (ref, v) => ({ lat: ref.lat + v.y / MPD, lng: ref.lng + v.x / (MPD * Math.cos(rad(ref.lat))) });
+
+  // 기하 중앙값(Weiszfeld): 이상치에 강한 대표점
+  function geoMedian(pts) {
+    let c = { x: pts.reduce((a, q) => a + q.x, 0) / pts.length, y: pts.reduce((a, q) => a + q.y, 0) / pts.length };
+    for (let it = 0; it < 60; it++) {
+      let nx = 0, ny = 0, w = 0;
+      for (const q of pts) { const d = Math.max(Math.hypot(q.x - c.x, q.y - c.y), 1e-6); nx += q.x / d; ny += q.y / d; w += 1 / d; }
+      const n = { x: nx / w, y: ny / w };
+      if (Math.hypot(n.x - c.x, n.y - c.y) < 1e-4) { c = n; break; }
+      c = n;
+    }
+    return c;
+  }
+
+  /*
+   * 여러 측정({lat,lng,acc})을 하나로 융합
+   * 1) 기하 중앙값을 중심으로, 거리의 MAD(중앙값 절대편차)로 이상치 제거 (3개 이상일 때)
+   * 2) 남은 값을 1/오차² 가중 평균 (오차가 작은 측정에 큰 비중)
+   * 3) 결과 불확도 = 1/√Σ(1/오차²), 단 하한 3m (측정 오차가 서로 독립이라는 가정의 과신 방지)
+   */
+  function robustFuse(samples) {
+    const n = samples.length;
+    if (!n) return null;
+    const ref = samples[0];
+    const loc = samples.map((q) => toLocal(ref, q));
+    const sig = samples.map((q) => Math.max(q.acc || 5, 3));
+    let keep = loc.map((_, i) => i);
+    if (n >= 3) {
+      const g = geoMedian(loc);
+      const d = loc.map((q) => Math.hypot(q.x - g.x, q.y - g.y));
+      const s = Math.max(median(d) * 1.4826, 3); // 거리 척도(최소 3m)
+      keep = d.map((v, i) => [v, i]).filter(([v]) => v <= 3 * s).map(([, i]) => i);
+      if (keep.length < 2) keep = d.map((v, i) => [v, i]).sort((a, b) => a[0] - b[0]).slice(0, 2).map(([, i]) => i);
+    }
+    let sw = 0, sx = 0, sy = 0;
+    for (const i of keep) { const w = 1 / (sig[i] * sig[i]); sw += w; sx += w * loc[i].x; sy += w * loc[i].y; }
+    const pos = fromLocal(ref, { x: sx / sw, y: sy / sw });
+    const out = Object.assign(pos, { acc: Math.max(3, 1 / Math.sqrt(sw)), used: keep.length, rejected: n - keep.length });
+    out.spread = Math.max(...keep.map((i) => Math.hypot(loc[i].x - sx / sw, loc[i].y - sy / sw)));
+    return out;
+  }
+
+  /*
+   * 보행용 칼만 필터: 등속 모델(위치+속도), x·y 독립 2상태 필터
+   * 측정잡음 R=오차², 공정잡음은 가속도 표준편차(걷기 약 1.2m/s²)로 설정
+   * 오차가 큰 측정은 자동으로 비중이 낮아지고, 연속 3회 크게 벗어나면 재초기화
+   */
+  function createKalman(opts) {
+    const q = ((opts && opts.accelStd) || 1.2) ** 2;
+    let ref = null, st = null, lastT = 0, bad = 0;
+    const mk = (z, r) => ({ x: z.x, v: 0, p00: r, p01: 0, p11: 4 });
+    function step(f, dt, z, r) {
+      f.x += f.v * dt;
+      const a = f.p00 + 2 * dt * f.p01 + dt * dt * f.p11 + (q * dt ** 4) / 4;
+      const b = f.p01 + dt * f.p11 + (q * dt ** 3) / 2;
+      const c = f.p11 + q * dt * dt;
+      const S = a + r, K0 = a / S, K1 = b / S, y = z - f.x;
+      const gate = Math.abs(y) > 4 * Math.sqrt(S);
+      f.x += K0 * y; f.v += K1 * y;
+      f.p00 = a - K0 * a; f.p01 = b - K0 * b; f.p11 = c - K1 * b;
+      return gate;
+    }
+    function update(fix) {
+      const t = fix.t || Date.now();
+      const r = Math.max(fix.acc || 10, 3) ** 2;
+      if (!ref || !st || t - lastT > 15000) {
+        ref = { lat: fix.lat, lng: fix.lng }; const z = toLocal(ref, fix);
+        st = { x: mk({ x: z.x }, r), y: mk({ x: z.y }, r) }; lastT = t; bad = 0;
+        return Object.assign({}, fix);
+      }
+      const dt = Math.min(Math.max((t - lastT) / 1000, 0.2), 10); lastT = t;
+      const z = toLocal(ref, fix);
+      const g = step(st.x, dt, z.x, r) | step(st.y, dt, z.y, r);
+      bad = g ? bad + 1 : 0;
+      if (bad >= 3) { ref = { lat: fix.lat, lng: fix.lng }; const z0 = toLocal(ref, fix); st = { x: mk({ x: z0.x }, r), y: mk({ x: z0.y }, r) }; bad = 0; }
+      const pos = fromLocal(ref, { x: st.x.x, y: st.y.x });
+      const sp = Math.hypot(st.x.v, st.y.v);
+      const hd = (deg(Math.atan2(st.x.v, st.y.v)) + 360) % 360; // 북=0, 동=90
+      return Object.assign({}, fix, {
+        lat: pos.lat, lng: pos.lng, acc: Math.max(3, Math.sqrt(st.x.p00)),
+        speed: fix.speed > 0 ? fix.speed : sp,
+        heading: Number.isFinite(fix.heading) ? fix.heading : (sp >= 0.7 ? hd : null),
+      });
+    }
+    return { update, reset() { ref = null; st = null; } };
+  }
+
   // ---------- 진동 패턴 (좌 짧짧 / 우 짧짧짧 / 정방향 짧 1 / 유턴 길길길 / 도착 길게) ----------
   const PAT = {
     ahead: [50],
@@ -303,5 +410,5 @@
     return { start, repeat, next, skipLeg, prevLeg, onFix, onCompass, status, _S: S };
   }
 
-  return { createEngine, dist, bearing, norm180, segDist, clock, cardinal, fmtDist, compassHeading, PAT, hasXY };
+  return { createEngine, robustFuse, geoMedian, createKalman, median, medianPoint, spreadM, REC, dist, bearing, norm180, segDist, clock, cardinal, fmtDist, compassHeading, PAT, hasXY };
 });

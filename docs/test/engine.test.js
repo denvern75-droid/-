@@ -123,3 +123,55 @@ test('좌표 미기록 지점은 경고하고 오작동하지 않음', () => {
   fix(at(0, 0));
   assert.ok(log.some((s) => /좌표가 아직 없음/.test(s)));
 });
+
+test('다회 기록: 중앙값이 이상치에 강함', () => {
+  const s = [at(0, 0), at(2, 1), at(1, -1), at(60, 0)].map((p) => ({ ...p, acc: 8 })); // 마지막은 60m 이상치
+  const m = W.medianPoint(s);
+  assert.ok(W.dist(m, at(1.5, 0)) < 3, '중앙값은 이상치(60m)에 끌려가지 않음');
+  assert.ok(W.spreadM(s) > 50);
+  assert.equal(W.median([3, 1, 2]), 2);
+  assert.equal(W.median([1, 2, 3, 4]), 2.5);
+  assert.equal(W.REC.rejectAcc, 25);
+});
+
+// 재현 가능한 의사 난수(정규분포 근사)
+function rng(seed) { let s = seed; const u = () => ((s = (s * 1664525 + 1013904223) % 4294967296) / 4294967296); return () => (u() + u() + u() + u() - 2) * 1.73; }
+
+test('강건 융합: 튀는 값 제거 + 정확한 측정에 가중', () => {
+  const s = [
+    { ...at(0, 0), acc: 5 }, { ...at(1, 1), acc: 5 }, { ...at(-1, 1), acc: 5 },
+    { ...at(80, 0), acc: 6 },                       // 이상치
+  ];
+  const f = W.robustFuse(s);
+  assert.equal(f.rejected, 1);
+  assert.ok(W.dist(f, at(0, 0.7)) < 2, '이상치 영향 없음');
+  // 가중: 오차 3m 측정이 오차 30m 측정보다 훨씬 큰 비중
+  const w = W.robustFuse([{ ...at(0, 0), acc: 3 }, { ...at(40, 0), acc: 30 }]);
+  assert.ok(W.dist(w, at(0, 0)) < 1, '정확한 쪽으로 치우침');
+  // 독립 측정 4개를 융합하면 불확도가 줄고 하한 3m 유지
+  const g = W.robustFuse([0, 1, 2, 3].map(() => ({ ...at(0, 0), acc: 10 })));
+  assert.ok(g.acc < 6 && g.acc >= 3);
+});
+
+test('칼만 필터: 직선 보행에서 잡음 감소', () => {
+  const n = rng(7), kf = W.createKalman();
+  let rawE = 0, kfE = 0, cnt = 0;
+  for (let i = 0; i < 90; i++) {
+    const truth = at(i * 1.3, 0); // 1.3m/s 북진
+    const meas = { ...at(i * 1.3 + n() * 6, n() * 6), acc: 8, heading: null, speed: 0, t: 1_000_000 + i * 1000 };
+    const out = kf.update(meas);
+    if (i >= 15) { rawE += W.dist(meas, truth) ** 2; kfE += W.dist(out, truth) ** 2; cnt++; }
+  }
+  const rawRMS = Math.sqrt(rawE / cnt), kfRMS = Math.sqrt(kfE / cnt);
+  assert.ok(kfRMS < rawRMS * 0.75, `raw ${rawRMS.toFixed(1)} → kf ${kfRMS.toFixed(1)}`);
+});
+
+test('칼만 필터: 진행 방향·속도 추정, 큰 점프 후 재수렴', () => {
+  const kf = W.createKalman();
+  let out;
+  for (let i = 0; i < 25; i++) out = kf.update({ ...at(0, i * 1.4), acc: 5, heading: null, speed: 0, t: 2_000_000 + i * 1000 }); // 동쪽 1.4m/s
+  assert.ok(Math.abs(out.heading - 90) < 8, `heading ${out.heading}`);
+  assert.ok(Math.abs(out.speed - 1.4) < 0.4, `speed ${out.speed}`);
+  for (let i = 25; i < 40; i++) out = kf.update({ ...at(500, 500), acc: 5, heading: null, speed: 0, t: 2_000_000 + i * 1000 }); // 위치 점프
+  assert.ok(W.dist(out, at(500, 500)) < 30, '재초기화로 수렴');
+});
