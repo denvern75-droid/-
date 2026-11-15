@@ -324,7 +324,7 @@
       }
       S.li = i; S.pi = 0; S.stIdx = 0; S.minD = Infinity; S.busStage = 0;
       S.lastGuidePos = null; S.lastGuideAt = 0; S.warnedMissing = null; S.inCnt = 0; S.busMin = null; S.busFar = false; S.busNoteAt = 0; S.offRoute = false; S.farWarned = false; S.fixNear = false; S.farCnt = 0; S.atSaid = false; S.busRiding = false; S.medianAt = 0; S.medianRep = false; S.nearRep = 0; S.crossed = false; S.crossAskAt = 0; S.vehCnt = 0; S.inHist = []; S.prevD = null; S.closeCnt = 0; S.nearSaid = false; S.awayCnt = 0; S.farAt = 0;
-      S.legAt = now(); S.soonSaid = false; S.surfCnt = 0; S.surfWarnAt = 0; S.wentUnder = false; S.offCnt = 0; S.crossFrom = null; S.crossCnt = 0;
+      S.legAt = now(); S.soonSaid = false; S.surfCnt = 0; S.surfWarnAt = 0; S.wentUnder = false; S.offCnt = 0; S.crossFrom = null; S.crossCnt = 0; S.nearCross = false; S.crossInfoSaid = false; S.caSaidAt = 0;
       S.lastFixAt = now(); S.gpsLost = false; S.fixInLeg = false;   // 지하 구간 동안의 무수신을 새 구간의 GPS 두절로 오인하지 않음
       const l = leg();
       const brief = prefix === S.route.overview ? legIntro(l, i) : legBrief(l, i);   // 출발 전 경로 소개와 함께일 때만 전체 설명
@@ -381,8 +381,16 @@
         const ref = [pb, pb && pb.alt, S.crossFrom].filter(hasXY);
         if (!S.crossFrom) S.crossFrom = { lat: fix.lat, lng: fix.lng };
         const away = Math.min(...[S.crossFrom].concat(ref).map((q) => dist(fix, q)));
-        S.crossCnt = away >= 40 ? (S.crossCnt || 0) + 1 : 0;
+        const ca = hasXY(l.crossAt) ? l.crossAt : null, dc = ca ? dist(fix, ca) : Infinity;
+        if (ca && dc <= 20) S.nearCross = true;
+        // 횡단보도 위치를 알면: 횡단보도 근처까지 갔다가 15m 넘게 벗어나고 승강장에서 50m 넘게 떨어졌을 때 건넌 것으로 봄. 모르면 승강장에서 40m
+        S.crossCnt = (ca ? (S.nearCross && dc >= 15 && away >= 50) : away >= 40) ? (S.crossCnt || 0) + 1 : 0;
         if (S.crossCnt >= 3) { S.crossed = true; S.lastGuidePos = null; if (io.onAuto) io.onAuto('crossed', fix); say('승강장에서 벗어난 것으로 보고 방향 안내를 시작함.', 'queue'); }
+      }
+      if (l.startMedian && !S.crossed && hasXY(l.crossAt)) {   // 건너기 전: 횡단보도까지 남은 거리만 알림(승강장을 따라 걷는 직선 구간), 근처에 오면 신호 정보
+        const ca = l.crossAt, dc = dist(fix, ca);
+        if (dc <= 20 && !S.crossInfoSaid) { S.crossInfoSaid = true; io.vibrate(PAT.warn); say(`횡단보도 근처임. ${ca.info || ''} 신호와 차량 소리를 직접 확인하고 건너세요.`, 'high'); }
+        else if (dc > 20 && (!S.caSaidAt || tNow0() - S.caSaidAt >= 30000)) { S.caSaidAt = tNow0(); say(`횡단보도까지 약 ${fmtDist(dc)}.`, 'queue'); }
       }
       if (l.startMedian && !S.crossed) {
         if (!S.crossAskAt || tNow0() - S.crossAskAt >= 60000) { const first = !S.crossAskAt; S.crossAskAt = tNow0(); if (!first) say('길을 건너 인도에 올라섰으면 다음 버튼을 누르세요.', 'queue'); }
@@ -402,7 +410,7 @@
         if (!S.medianAt || (tNow - S.medianAt >= 60000 && !S.medianRep)) {
           const firstTime = !S.medianAt; if (!firstTime) S.medianRep = true; S.medianAt = tNow; S.nearSaid = true; io.vibrate(PAT.warn);
           say(firstTime
-            ? `${nm(t)} 근처임. 이 정류장은 도로 한가운데 승강장이라 여기서부터 방향 안내를 멈춤. 횡단보도 위치는 앱이 모름. 주변 사람에게 중앙 버스정류장으로 가는 횡단보도를 물어보세요. 승강장에 올라서면 다음 버튼을 누르세요.`
+            ? `${nm(t)} 근처임. 이 정류장은 도로 한가운데 승강장이라 여기서부터 방향 안내를 멈춤. ${t.crossHint || '횡단보도 위치는 앱이 모름.'} 주변 사람에게 중앙 버스정류장으로 가는 횡단보도를 물어보세요. 승강장에 올라서면 다음 버튼을 누르세요.`
             : `${nm(t)}은 도로 한가운데 승강장임. 횡단보도는 주변 사람에게 물어보세요. 승강장에 올라서면 다음 버튼을 누르세요.`, firstTime ? 'high' : 'queue');
         }
         return;
