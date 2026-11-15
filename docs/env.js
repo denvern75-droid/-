@@ -57,8 +57,10 @@
   function roadInfo(tags) {
     const t = tags || {};
     const hw = t.highway || '';
-    const kind = { living_street: '생활도로(보행자 우선 도로)', pedestrian: '보행자 전용 도로', service: '이면도로·진입로', residential: '주택가 도로',
-      unclassified: '일반 도로', tertiary: '간선 보조 도로', secondary: '간선 도로', primary: '간선 도로', footway: '보행로', path: '보행로' }[hw] || '도로 유형 정보 없음';
+    // 도로 표기는 '지도 표기'로만 전달함. 생활도로·주택가 도로가 보차혼용·인도 없음과 같은 뜻은 아님(한국 OSM 분류 합의 불안정)
+    const kind = { living_street: '지도에 생활도로로 표기됨. 보차혼용 여부는 확인되지 않음', pedestrian: '지도에 보행자 전용 도로로 표기됨', service: '지도에 이면도로·진입로로 표기됨',
+      residential: '지도에 주택가 도로로 표기됨', unclassified: '지도에 일반 도로로 표기됨', tertiary: '지도에 간선 보조 도로로 표기됨', secondary: '지도에 간선 도로로 표기됨',
+      primary: '지도에 간선 도로로 표기됨', footway: '지도에 보행로로 표기됨', path: '지도에 보행로로 표기됨' }[hw] || '도로 유형 정보 없음';
     const oneway = t.oneway === 'yes' || t.oneway === 'true' || t.oneway === '1' ? 'yes' : t.oneway === '-1' ? 'reverse' : t.oneway === 'no' ? 'no' : 'unknown';
     const sw = t.sidewalk || '';
     const sidewalk = ['both', 'left', 'right', 'yes', 'separate'].includes(sw) ? 'yes' : ['no', 'none'].includes(sw) ? 'no' : 'unknown';
@@ -102,7 +104,7 @@
   function legText(env) {
     if (!env) return '';
     const p = [];
-    if (env.crossings && env.crossings.length) p.push(`건널 횡단보도 ${env.crossings.length}개`);
+    if (env.crossings && env.crossings.length) p.push(`지도 데이터에 있는 횡단보도 ${env.crossings.length}개. 지도에 없는 횡단보도가 더 있을 수 있음`);
     if (env.landmarks && env.landmarks.length) p.push(env.landmarks.map((x) => landmarkText(x.list, x.where)).filter(Boolean).join('. '));
     if (env.road) p.push('진입 도로: ' + roadText(env.road));
     if (env.dest && env.dest.length) p.push(landmarkText(env.dest, '목적지'));

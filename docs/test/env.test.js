@@ -25,10 +25,10 @@ test('경로 위 횡단보도: 경로 근처만, 진행 거리순, 중복 제거
 
 test('도로: 일방통행·인도 없음은 명시된 경우만 단정', () => {
   const r = E.roadInfo({ highway: 'service', name: '독산로85길', oneway: 'yes', sidewalk: 'no' });
-  assert.match(E.roadText(r), /독산로85길, 이면도로·진입로, 일방통행, 인도 없음.*차량 소리에 주의/);
+  assert.match(E.roadText(r), /독산로85길, 지도에 이면도로·진입로로 표기됨, 일방통행, 인도 없음.*차량 소리에 주의/);
   const u = E.roadInfo({ highway: 'residential' });
   assert.match(E.roadText(u), /일방통행 여부 정보 없음, 인도 유무 정보 없음/);        // 태그 없음 ≠ 양방향
-  assert.match(E.roadText(E.roadInfo({ highway: 'living_street' })), /생활도로\(보행자 우선 도로\)/);
+  assert.match(E.roadText(E.roadInfo({ highway: 'living_street' })), /생활도로로 표기됨. 보차혼용 여부는 확인되지 않음/);
   assert.match(E.roadText(E.roadInfo({ highway: 'residential', oneway: 'no', sidewalk: 'both' })), /양방향, 인도 있음/);
   const w = [{ tags: { highway: 'residential', name: '다른길' } }, { tags: { highway: 'service', name: '독산로85길' } }];
   assert.equal(E.pickRoad(w, '독산로85길').name, '독산로85길');
@@ -53,5 +53,5 @@ test('구간 안내문: 주의 문구 포함, 데이터 없으면 빈 문자열'
   assert.equal(E.legText(null), '');
   assert.equal(E.legText({ crossings: [], landmarks: [], road: null, dest: [] }), '');
   const t = E.legText({ crossings: [{}, {}], road: E.roadInfo({ highway: 'service', oneway: 'yes' }), dest: [{ name: '맛나편의점', kind: '점포', floor: '' }] });
-  assert.match(t, /건널 횡단보도 2개/); assert.match(t, /진입 도로: .*일방통행/); assert.match(t, /정보 없음은 없다는 뜻이 아님/);
+  assert.match(t, /지도 데이터에 있는 횡단보도 2개. 지도에 없는 횡단보도가 더 있을 수 있음/); assert.match(t, /진입 도로: .*일방통행/); assert.match(t, /정보 없음은 없다는 뜻이 아님/);
 });
