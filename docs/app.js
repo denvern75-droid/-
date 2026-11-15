@@ -73,7 +73,7 @@
       navigator.serviceWorker && navigator.serviceWorker.ready.then((r) =>
         r.showNotification('길동무', { body: text, tag: 'walknav', renotify: true, vibrate: [200, 100, 200] }));
     },
-    onLegChange() { refreshRec(); },
+    onLegChange(i, l) { refreshRec(); tripEvent('구간', { leg: i, title: l && l.title }); },
   };
   const engine = W.createEngine({ io });
   const kf = W.createKalman();
@@ -91,6 +91,7 @@
       rawFix = { lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy,
         heading: p.coords.heading, speed: Number.isFinite(p.coords.speed) ? p.coords.speed : null, t: Date.now() };
       recSample(rawFix);                 // 기록은 원시 값으로(이중 평활 방지)
+      tripFix(rawFix);
       lastFix = kf.update(rawFix);       // 안내는 칼만 평활 값으로
       if (learner) learner.onFix(lastFix);
       engine.onFix(lastFix); render();
@@ -418,6 +419,59 @@
     $('mSrc').textContent = s.headingSrc || (hasCompass ? '대기' : '없음');
   }
 
+  // ---------- 이동 기록(안내 시작과 함께 자동 저장) ----------
+  // 궤적(3초마다 위치)과 사건(구간 전환, 이용자 확인)을 폰에 저장. 나중에 좌표 보정과 꺾는 지점 분석에 사용
+  const LS_TRIPS = 'walknav.trips.v1';
+  let trip = null, tripLastAt = 0;
+  const loadTrips = () => { try { return JSON.parse(localStorage.getItem(LS_TRIPS) || '[]'); } catch (e) { return []; } };
+  function saveTrip() {
+    if (!trip) return;
+    const all = loadTrips().filter((x) => x.id !== trip.id); all.push(trip);
+    while (all.length > 6) all.shift();
+    try { localStorage.setItem(LS_TRIPS, JSON.stringify(all)); } catch (e) { all.shift(); try { localStorage.setItem(LS_TRIPS, JSON.stringify(all)); } catch (e2) { /* 저장 공간 부족 */ } }
+  }
+  function tripStart() { trip = { id: 'trip-' + Date.now(), routeId: route.id, routeName: route.name, start: Date.now(), track: [], events: [] }; saveTrip(); }
+  function tripFix(f) {
+    if (!trip || f.t - tripLastAt < 3000 || !(f.acc <= 60) || trip.track.length >= 4000) return;
+    tripLastAt = f.t;
+    trip.track.push([Math.round((f.t - trip.start) / 1000), +f.lat.toFixed(6), +f.lng.toFixed(6), Math.round(f.acc), f.speed == null ? null : +(+f.speed).toFixed(1)]);
+    if (trip.track.length % 10 === 0) saveTrip();
+  }
+  function tripEvent(type, extra) {
+    if (!trip) return;
+    trip.events.push(Object.assign({ t: Math.round((Date.now() - trip.start) / 1000), type, fix: rawFix && Date.now() - rawFix.t < 10000 ? [+rawFix.lat.toFixed(6), +rawFix.lng.toFixed(6), Math.round(rawFix.acc)] : null }, extra || {}));
+    saveTrip();
+  }
+  // 이용자가 다음 버튼으로 확인한 순간의 위치를 '확인된 좌표'로 저장(찾았음·건넜음·내렸음)
+  function captureConfirm(s) {
+    const f = rawFix && Date.now() - rawFix.t < 10000 && rawFix.acc <= 25 ? rawFix : null;
+    const l = s.leg; if (!l) return;
+    if (s.waitCross) { tripEvent('건넜음', { leg: s.legIndex }); if (f) { (l.crossSamples = l.crossSamples || []).push({ lat: f.lat, lng: f.lng, acc: f.acc, t: Date.now() }); persist(); } return; }
+    if (l.type === 'walk' && s.point) {
+      tripEvent('찾았음', { leg: s.legIndex, point: s.point.id, name: s.point.name });
+      if (f && (s.near || !W.hasXY(s.point))) applyLearnedPoint({ id: s.point.id, legIndex: s.legIndex, lat: f.lat, lng: f.lng, acc: Math.max(f.acc, 8) });
+      return;
+    }
+    if (l.type === 'bus') {
+      tripEvent('내렸음', { leg: s.legIndex });
+      if (f && f.speed != null && f.speed < 3 && l.alight) applyLearnedPoint({ id: 'alight', legIndex: s.legIndex, lat: f.lat, lng: f.lng, acc: Math.max(f.acc, 8) });
+      return;
+    }
+    if (l.type === 'subway') tripEvent('역', { leg: s.legIndex, idx: s.stIdx });
+  }
+  $('tripShareBtn').onclick = async () => {
+    const all = loadTrips();
+    if (!all.length) return io.speak('저장된 이동 기록이 없음.', 'high');
+    const text = JSON.stringify({ app: 'gildongmu', exported: new Date().toISOString(), route: data, trips: all });
+    try {
+      const file = new File([text], 'gildongmu-trips.json', { type: 'application/json' });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) await navigator.share({ files: [file], title: '길동무 이동 기록' });
+      else if (navigator.share) await navigator.share({ title: '길동무 이동 기록', text });
+      else { await navigator.clipboard.writeText(text); }
+      io.speak(`이동 기록 ${all.length}건을 보낼 준비를 했음.`, 'high');
+    } catch (e) { io.speak('이동 기록 보내기를 취소했음.', 'high'); }
+  };
+
   // ---------- 버튼 ----------
   $('routeSel').onchange = (e) => { route = data.routes[+e.target.value]; refreshRec(); };
   const PROG = 'walknav.prog.v1';
@@ -434,6 +488,7 @@
     const prog = loadProg();
     if (prog && prog.routeId === route.id) engine.restore(route, prog); else engine.start(route, 0);
     if (wakeFail) io.speak('화면이 꺼지면 안내가 멈출 수 있음. 화면을 켜 두세요.', 'queue');
+    if (!trip) { tripStart(); io.speak('이동 기록을 함께 저장함.', 'queue'); }
     $('startBtn').hidden = true;   // 진행 중 실수로 눌러 처음으로 돌아가지 않게 숨김
     $('now').focus();              // 숨긴 버튼에 있던 화면낭독기 포커스를 안내 영역으로 옮김
     refreshRec(); render();
@@ -450,10 +505,11 @@
   const confirmNext = twice('next', () => engine.next(), '안내 중인 지점을 건너뜁니다. 맞으면 한 번 더 누르세요.');
   const doNext = () => {            // 지하철 역 세기, 버스 하차, 위치 정보 없는 지점은 한 번에. 안내 중인 도보 지점을 건너뛰는 것만 확인
     const s = engine.status();
-    if (s.waitCross) { engine.next(); render(); return; }   // 길을 건넜다는 확인은 한 번에
-    if (s.leg && s.leg.type === 'bus' && s.busEarly) return twice('busnext', () => engine.next(), '아직 달리는 중이거나 하차 정류장 전인 것 같음. 정말 내렸으면 한 번 더 누르세요.')();
-    if (s.leg && s.leg.type === 'walk' && s.point && W.hasXY(s.point) && !s.near) return confirmNext();   // '부근' 안내를 받은 뒤에는 찾았다는 뜻이므로 한 번에
-    engine.next(); render();
+    const go = () => { captureConfirm(s); engine.next(); render(); };
+    if (s.waitCross) { go(); return; }   // 길을 건넜다는 확인은 한 번에
+    if (s.leg && s.leg.type === 'bus' && s.busEarly) return twice('busnext', go, '아직 달리는 중이거나 하차 정류장 전인 것 같음. 정말 내렸으면 한 번 더 누르세요.')();
+    if (s.leg && s.leg.type === 'walk' && s.point && W.hasXY(s.point) && !s.near) return twice('next', () => { tripEvent('건너뜀', { leg: s.legIndex, point: s.point.id }); engine.next(); }, '안내 중인 지점을 건너뜁니다. 맞으면 한 번 더 누르세요.')();
+    go();
   };
   $('nextBtn').onclick = () => { doNext(); saveProg(); };
   $('detailBtn').onclick = () => engine.detail();
@@ -501,5 +557,5 @@
   loadData().then(() => autoSeed(false)).catch((e) => { $('now').textContent = '경로를 불러오지 못했음: ' + e.message; });
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
   setInterval(() => { if (started) { engine.tick(); render(); } }, 1000);   // GPS 두절 감지는 나침반 이벤트가 없어도 동작해야 함
-  window.__walknav = { engine, get route() { return route; }, feed: (f) => { lastFix = f; if (learner) learner.onFix(f); engine.onFix(f); render(); } };
+  window.__walknav = { engine, get route() { return route; }, feed: (f) => { lastFix = f; if (learner) learner.onFix(f); engine.onFix(f); render(); }, feedRaw: (f) => { rawFix = f; tripFix(f); lastFix = kf.update(f); engine.onFix(lastFix); render(); } };
 })();
