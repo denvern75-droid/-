@@ -51,6 +51,11 @@
 
   <button class="primary" id="startBtn">안내 시작</button>
 
+  <button class="primary" id="learnBtn" style="font-size:24px;min-height:84px;margin-top:10px" aria-describedby="learnHelp">🚶 직접 걸으며 자동 기록</button>
+  <p id="learnHelp" class="meta">평소처럼 걸으면 집·출구·정류장·하차 지점·사무실 위치와 걸은 방향·거리가 자동으로 저장됨. 별도 조작 불필요.</p>
+  <label for="learnFrom">기록 시작 구간</label>
+  <select id="learnFrom" aria-label="기록 시작 구간"></select>
+
   <div class="grid" style="margin-top:10px">
     <button id="repeatBtn">🔊 다시 듣기</button>
     <button id="nextBtn">다음 ▶</button>
@@ -71,6 +76,8 @@
   <details id="recDet">
     <summary>🛠 현장 기록 모드 (동행인·활동지원사와 1회 실행)</summary>
     <p class="meta">지점에 실제로 서서 [여기 저장]을 누르면 약 8초간 GPS를 평균 내어 좌표로 저장함. 출구 바로 앞·정류장 기둥 옆·사무실 입구에서 저장할 것. 걸어오며 횡단보도·꺾는 지점도 [지점 추가]로 넣을 수 있음.</p>
+    <button id="learnSumBtn" style="margin-bottom:10px">🔊 기록된 방향·거리 요약 듣기</button>
+    <div id="learnSum" class="meta"></div>
     <div id="ptList"></div>
     <div class="grid">
       <button id="addPtBtn">＋ 현재 위치에 지점 추가</button>
@@ -104,6 +111,7 @@
 </main>
 
 <script src="engine.js"></script>
+<script src="learn.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

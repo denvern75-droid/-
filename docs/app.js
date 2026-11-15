@@ -49,6 +49,8 @@
   };
   const engine = W.createEngine({ io });
   const kf = W.createKalman();
+  const WL = window.WalkLearn;
+  let learner = null;
 
   // ---------- 센서 ----------
   function startGeo() {
@@ -59,6 +61,7 @@
         heading: p.coords.heading, speed: p.coords.speed || 0, t: Date.now() };
       recSample(rawFix);                 // 기록은 원시 값으로(이중 평활 방지)
       lastFix = kf.update(rawFix);       // 안내는 칼만 평활 값으로
+      if (learner) learner.onFix(lastFix);
       engine.onFix(lastFix); render();
     }, (e) => io.speak('위치 오류: ' + e.message + '. 위치 권한과 GPS를 확인해 주세요.', 'high'),
     { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
@@ -106,6 +109,7 @@
   }
   function refreshRec() {
     const box = $('ptList'); if (!box || !route) return; box.innerHTML = '';
+    fillLearnUI();
     const pts = allWalkPoints();
     pts.forEach(({ p, l }) => {
       const row = document.createElement('div'); row.className = 'pt';
@@ -136,6 +140,65 @@
       row.append(info, b); box.appendChild(row);
     });
   }
+  // ---------- 학습 보행(자동 기록) ----------
+  function fillLearnUI() {
+    const sel = $('learnFrom'); if (!sel || !route) return;
+    const keep = sel.value;
+    sel.innerHTML = '';
+    route.legs.forEach((l, i) => { const o = document.createElement('option'); o.value = i; o.textContent = (i === 0 ? '처음부터: ' : (i + 1) + '단계: ') + l.title; sel.appendChild(o); });
+    if (keep && sel.options[keep]) sel.value = keep;
+    const sums = route.legs.map((l, i) => (l.learned && l.learned.text) ? `<p><b>${i + 1}단계 ${l.title}</b><br>${l.learned.text}</p>` : '').join('');
+    $('learnSum').innerHTML = sums || '<p>아직 걸어서 기록된 구간이 없음.</p>';
+  }
+  function findPoint(id) {
+    for (const l of route.legs) { const p = (l.points || []).find((q) => q.id === id); if (p) return p; }
+    return null;
+  }
+  function applyLearnedPoint(e) {
+    let tgt = null;
+    if (e.id === 'home') tgt = route.home = route.home || { name: '집' };
+    else if (e.id === 'alight') tgt = route.legs[e.legIndex].alight;
+    else tgt = findPoint(e.id);
+    if (!tgt) return;
+    tgt.samples = tgt.samples || [];
+    tgt.samples.push({ lat: e.lat, lng: e.lng, acc: e.acc, t: Date.now() });
+    const m = W.robustFuse(tgt.samples);
+    tgt.lat = m.lat; tgt.lng = m.lng; tgt.recAcc = Math.round(m.acc);
+    persist(); refreshRec();
+  }
+  function applyLearnedLeg(e) {
+    const l = route.legs[e.legIndex]; if (!l || !l.points) return;
+    l.points = l.points.filter((p) => !p.auto);            // 이전 자동 꺾는 지점 교체
+    const last = l.points.pop();
+    e.turns.forEach((t, i) => l.points.push({ id: `auto-${e.legIndex}-${i}`, auto: true, name: '꺾는 곳', kind: 'turn', radius: 8, lat: t.lat, lng: t.lng,
+      say: `${t.turn === 'left' ? '왼쪽' : '오른쪽'}으로 약 ${t.angle}도 꺾기. 이후 ${W.fmtDist(t.nextLen)} 직진.` }));
+    l.points.push(last);
+    l.learned = { text: e.text, distance: Math.round(e.distance), at: Date.now() };
+    persist(); refreshRec();
+  }
+  function stopLearn(msg) {
+    learner = null; $('learnBtn').textContent = '🚶 직접 걸으며 자동 기록';
+    if (msg) io.speak(msg, 'high');
+  }
+  $('learnBtn').onclick = async () => {
+    if (learner) return stopLearn('학습 보행을 중지했음. 지금까지 기록된 내용은 저장되어 있음.');
+    route = data.routes[+$('routeSel').value];
+    startGeo(); startCompass();
+    try { wake = await navigator.wakeLock.request('screen'); } catch (e) {}
+    learner = WL.createLearner({ route,
+      say: (t) => io.speak(t, 'normal'),
+      onPoint: applyLearnedPoint, onLegDone: applyLearnedLeg,
+      onDone: () => stopLearn() });
+    $('learnBtn').textContent = '⏹ 학습 보행 중지';
+    io.speak('학습 보행을 시작함. 평소처럼 걸으세요. 위치는 자동으로 기록되며 별도 조작은 필요 없음. 하늘이 트인 곳에서 5초 정도 서 있으면 집 위치가 먼저 기록됨.', 'high');
+    learner.start(+$('learnFrom').value || 0);
+  };
+  $('learnSumBtn').onclick = () => {
+    const parts = route.legs.map((l, i) => (l.learned && l.learned.text) ? `${i + 1}단계 ${l.title}. ${l.learned.text}.` : '').filter(Boolean);
+    io.speak(parts.length ? parts.join(' ') : '아직 걸어서 기록된 구간이 없음.', 'high');
+  };
+  setInterval(() => { if (learner) learner.tick(); }, 1000);
+
   function recordPoint(p) {
     if (!lastFix) { startGeo(); io.speak('GPS를 잡는 중임. 잠시 후 다시 눌러주세요.', 'high'); return; }
     recTarget = p; recBuf = (rawFix && Date.now() - rawFix.t < 5000 && rawFix.acc <= 40) ? [rawFix] : []; io.speak('위치 기록 중. 8초간 가만히 서 계세요.', 'high');
@@ -252,5 +315,5 @@
   loadData().catch((e) => { $('now').textContent = '경로를 불러오지 못했음: ' + e.message; });
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
   setInterval(() => { if (started) render(); }, 1000);
-  window.__walknav = { engine, get route() { return route; }, feed: (f) => { lastFix = f; engine.onFix(f); render(); } };
+  window.__walknav = { engine, get route() { return route; }, feed: (f) => { lastFix = f; if (learner) learner.onFix(f); engine.onFix(f); render(); } };
 })();

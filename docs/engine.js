@@ -253,7 +253,7 @@
       const head = `${i + 1}단계. ${l.title}.`;
       if (l.type === 'walk') {
         const miss = l.points.filter((p) => !hasXY(p)).length;
-        return `${head} ${l.intro || ''}` + (miss ? ` 주의, 좌표가 기록되지 않은 지점이 ${miss}개 있음.` : '');
+        return `${head} ${l.intro || ''}` + (l.learned && l.learned.text ? ` 걸었던 기록: ${l.learned.text}.` : '') + (miss ? ` 주의, 좌표가 기록되지 않은 지점이 ${miss}개 있음.` : '');
       }
       if (l.type === 'subway') {
         const n = l.stations ? l.stations.length - 1 : null;
