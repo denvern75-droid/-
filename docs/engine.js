@@ -508,7 +508,7 @@
     function onCompass(h) { S.compass = { val: ((h % 360) + 360) % 360, t: now() }; checkSilence(); }
 
     // ---------- 사용자 조작 ----------
-    function start(route, legIndex) { S.route = route; enterLeg(legIndex || 0); }
+    function start(route, legIndex) { S.route = route; enterLeg(legIndex || 0, !legIndex && route.overview ? route.overview : undefined); }   // 처음부터 시작하면 경로 전체 소개를 먼저 읽음
     function repeat() {
       const l = leg();
       if (l && l.type === 'walk' && S.fix && hasXY(target())) return guide('repeat');

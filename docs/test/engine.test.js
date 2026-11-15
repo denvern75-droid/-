@@ -396,3 +396,16 @@ test('중앙차로 정류장: 60m 안에서는 방향·거리 안내와 자동 �
   assert.equal(beeps.length, 0, '차도 쪽으로 끌어당기는 근접 비프 없음');
   assert.equal(eng.status().legIndex, 0); eng.next(); assert.equal(eng.status().legIndex, 1);
 });
+
+test('경로 소개: 처음부터 시작하면 전체 길 설명을 먼저 읽고 이어서 첫 구간 안내', () => {
+  const log = [];
+  const io = { speak: (s, p) => { log.push([p, s]); }, vibrate() {}, beep() {}, notify() {} };
+  const route = require('../route.json').routes[0];
+  const eng = W.createEngine({ io, now: () => 1 });
+  eng.start(route, 0);
+  assert.equal(route.id, 'E');
+  assert.match(log[0][1], /여의도역 6번 출구로 나와.*5613번.*문성초등학교.*왼쪽으로 길을 건너.*좌회전 지점은 서울정형외과의원.*1층에 행복한 공인중개사 사무소.*3층/);
+  assert.equal(log[0][0], 'high'); assert.equal(log[1][0], 'queue');
+  const ret = require('../route.json').routes[1];
+  assert.equal(ret.id, 'R'); assert.match(ret.overview, /온 길을 그대로 되돌아감.*여의도역 5번 출구/);
+});
