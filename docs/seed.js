@@ -59,7 +59,7 @@
   // ---------- 네트워크 ----------
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   async function nominatim(f, q, extra) {
-    const url = `${NOMINATIM}?q=${encodeURIComponent(q)}&format=jsonv2&addressdetails=1&limit=5&countrycodes=kr&accept-language=ko&viewbox=${SEOUL_VIEWBOX}&bounded=1${extra || ''}`;
+    const url = `${NOMINATIM}?q=${encodeURIComponent(q)}&format=jsonv2&addressdetails=1&limit=20&countrycodes=kr&accept-language=ko&viewbox=${SEOUL_VIEWBOX}&bounded=1${extra || ''}`;
     const r = await f(url, { headers: { Accept: 'application/json' } });
     if (!r.ok) throw new Error('nominatim ' + r.status);
     return r.json();
