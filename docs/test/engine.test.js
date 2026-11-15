@@ -404,7 +404,7 @@ test('경로 소개: 처음부터 시작하면 전체 길 설명을 먼저 읽�
   const eng = W.createEngine({ io, now: () => 1 });
   eng.start(route, 0);
   assert.equal(route.id, 'E');
-  assert.match(log[0][1], /여의도역 6번 출구로 나와.*5613번.*문성초등학교.*왼쪽으로 길을 건너.*좌회전 지점은 서울정형외과의원.*1층에 행복한 공인중개사 사무소.*3층/);
+  assert.match(log[0][1], /여의도역 6번 출구로 나와.*5623번.*문성초등학교.*왼쪽으로 길을 건너.*좌회전 지점은 서울정형외과의원.*1층에 행복한 공인중개사 사무소.*3층/);
   assert.equal(log[0][0], 'high'); assert.equal(log[1][0], 'queue');
   const ret = require('../route.json').routes[1];
   assert.equal(ret.id, 'R'); assert.match(ret.overview, /온 길을 그대로 되돌아감.*여의도역 5번 출구/);
@@ -485,5 +485,5 @@ test('재검증 3차 회귀: 다음 버튼을 놓치고 버스에 타도 하차 
   for (const dN of [450, 140, 30]) { t += 5000; eng.onFix({ lat: al.alt.lat + dN / M, lng: al.alt.lng, acc: 8, heading: 180, speed: 8, t }); }
   assert.ok(log.some((s) => /하차 준비/.test(s)) && log.some((s) => /하차벨을 누르세요. 버스가 서고 정류장 이름이 문성초등학교이면/.test(s)), log.join('|'));
   assert.ok(log.some((s) => /지금 서는 정류장 이름이 문성초등학교이면 내리세요/.test(s)));
-  assert.equal(W.spoken('시흥대로138길, 독산로85길 37, 5613번'), '시흥대로138길, 독산로85길 37, 5 6 1 3번');
+  assert.equal(W.spoken('시흥대로138길, 독산로85길 37, 5623번'), '시흥대로138길, 독산로85길 37, 5 6 2 3번');
 });
