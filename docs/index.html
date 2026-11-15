@@ -67,6 +67,25 @@
     <button id="voiceCmdBtn">음성 명령</button>
   </div>
 
+  <section class="card" aria-labelledby="mapH">
+    <h2 id="mapH">지도 앱에서 대중교통 보기</h2>
+    <p class="meta">실시간 버스 도착과 환승 정보는 지도 앱에서 확인함. 목적지는 사무실로 자동 입력됨.</p>
+    <div class="grid">
+      <button id="openKakao">카카오맵 열기</button>
+      <button id="openNaver">네이버지도 열기</button>
+      <button id="openGoogle">구글지도 열기</button>
+    </div>
+  </section>
+
+  <section class="card" id="shareBox" hidden aria-labelledby="shareH">
+    <h2 id="shareH" tabindex="-1">공유로 받은 위치</h2>
+    <p id="shareMsg" class="meta"></p>
+    <label for="shareTarget">저장할 지점</label>
+    <select id="shareTarget" aria-label="저장할 지점"></select>
+    <button id="shareSaveBtn" class="primary" style="font-size:22px;min-height:72px;margin-top:10px">이 지점으로 저장</button>
+    <button id="shareCancelBtn" style="margin-top:10px">저장하지 않음</button>
+  </section>
+
   <div class="card meta" id="meta" aria-live="off">
     단계 <b id="mLeg">-</b> · 다음 지점 <b id="mPt">-</b><br>
     거리 <b id="mDist">-</b> · 방향 <b id="mDir">-</b><br>
@@ -113,6 +132,7 @@
 
 <script src="engine.js"></script>
 <script src="learn.js"></script>
+<script src="links.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

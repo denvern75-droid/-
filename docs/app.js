@@ -66,6 +66,7 @@
   const engine = W.createEngine({ io });
   const kf = W.createKalman();
   const WL = window.WalkLearn;
+  const LK = window.WalkLinks;
   let learner = null;
 
   // ---------- 센서 ----------
@@ -170,12 +171,17 @@
     for (const l of route.legs) { const p = (l.points || []).find((q) => q.id === id); if (p) return p; }
     return null;
   }
+  // 기존 좌표(출처 불명)는 지우지 않고 낮은 비중(오차 25m)의 기준값으로 남겨 새 측정과 융합
+  function seedExisting(tgt) {
+    if (W.hasXY(tgt) && !(tgt.samples && tgt.samples.length)) tgt.samples = [{ lat: tgt.lat, lng: tgt.lng, acc: 25, t: 0, src: 'seed' }];
+  }
   function applyLearnedPoint(e) {
     let tgt = null;
     if (e.id === 'home') tgt = route.home = route.home || { name: '집' };
     else if (e.id === 'alight') tgt = route.legs[e.legIndex].alight;
     else tgt = findPoint(e.id);
     if (!tgt) return;
+    seedExisting(tgt);
     tgt.samples = tgt.samples || [];
     tgt.samples.push({ lat: e.lat, lng: e.lng, acc: e.acc, t: Date.now() });
     const m = W.robustFuse(tgt.samples);
@@ -215,6 +221,73 @@
     io.speak(parts.length ? parts.join(' ') : '아직 걸어서 기록된 구간이 없음.', 'high');
   };
   setInterval(() => { if (learner) learner.tick(); }, 1000);
+
+  // ---------- 외부 지도 앱 연계 ----------
+  function officeDest() {
+    const last = route && route.legs.slice().reverse().find((l) => l.type === 'walk' && l.points.length);
+    const p = last && last.points[last.points.length - 1];
+    return { name: (data && data.destination) || '독산로85길 37', lat: p && W.hasXY(p) ? p.lat : null, lng: p && W.hasXY(p) ? p.lng : null };
+  }
+  const openMap = (k) => { const l = LK.mapLinks(officeDest(), 'transit'); io.speak(['카카오맵', '네이버지도', '구글지도'][['kakao', 'naver', 'google'].indexOf(k)] + '을 엽니다.', 'high'); window.location.href = l[k]; };
+  $('openKakao').onclick = () => openMap('kakao');
+  $('openNaver').onclick = () => openMap('naver');
+  $('openGoogle').onclick = () => openMap('google');
+
+  // ---------- 공유로 받은 위치 ----------
+  let shared = null;
+  function savePoints() {
+    const out = [];
+    out.push({ label: '집', ref: () => (route.home = route.home || { name: '집' }) });
+    route.legs.forEach((l) => {
+      (l.points || []).filter((p) => !p.auto).forEach((p) => out.push({ label: p.name, ref: () => p }));
+      if (l.type === 'bus' && l.alight) out.push({ label: '하차 정류장 ' + l.alight.name, ref: () => l.alight });
+    });
+    return out;
+  }
+  function handleShared(text) {
+    const r = LK.parseShared(text);
+    const box = $('shareBox'); box.hidden = false; shared = r;
+    if (!r.ok) {
+      const why = { short: '공유된 링크가 짧은 주소라 위치 숫자가 들어 있지 않음. 지도 앱에서 좌표를 복사해 공유하거나, 걸어서 자동 기록을 이용해 주세요.',
+        outside: '받은 위치가 서울권 밖이라 저장하지 않았음.', none: '공유된 내용에서 위치를 찾지 못했음.' }[r.reason] || '위치를 읽지 못했음.';
+      $('shareMsg').textContent = why; $('shareSaveBtn').hidden = true; $('shareTarget').hidden = true;
+      io.speak('공유를 받았음. ' + why, 'high'); return;
+    }
+    const pts = savePoints();
+    const sel = $('shareTarget'); sel.innerHTML = '';
+    let best = 0, bs = -1;
+    const ph = document.createElement('option'); ph.value = -1; ph.textContent = '지점을 선택해 주세요'; sel.appendChild(ph); // 직접 고르기 전에는 저장 불가
+    pts.forEach((q, i) => { const o = document.createElement('option'); o.value = i; o.textContent = q.label; sel.appendChild(o); const sc = LK.similarity(r.name, q.label); if (sc > bs) { bs = sc; best = i; } });
+    if (bs >= 0.5) sel.value = best;
+    $('shareSaveBtn').hidden = false; sel.hidden = false;
+    const nm = r.name ? r.name + ', ' : '';
+    $('shareMsg').textContent = `받은 위치: ${nm}위도 ${r.lat.toFixed(5)}, 경도 ${r.lng.toFixed(5)}. 지도 앱의 위치는 건물이나 장소 중심이라 출구·정류장과 수 미터 어긋날 수 있음.`;
+    io.speak(`공유를 받았음. ${nm}위치를 읽었음. ` + (bs >= 0.5 ? `${pts[best].label} 지점으로 저장할까요. 맞으면 이 지점으로 저장을 누르세요.` : '저장할 지점을 고른 뒤 저장을 누르세요.'), 'high');
+    box.querySelector('h2').focus();
+  }
+  $('shareSaveBtn').onclick = () => {
+    if (!shared || !shared.ok) return;
+    const idx = +$('shareTarget').value;
+    if (!(idx >= 0)) { io.speak('저장할 지점을 먼저 선택해 주세요.', 'high'); return; }
+    const q = savePoints()[idx]; if (!q) return;
+    const tgt = q.ref();
+    seedExisting(tgt);
+    tgt.samples = tgt.samples || [];
+    tgt.samples.push({ lat: shared.lat, lng: shared.lng, acc: 25, t: Date.now(), src: shared.source }); // 장소 중심 좌표는 오차 25m로 가중치를 낮춤
+    const m = W.robustFuse(tgt.samples);
+    tgt.lat = m.lat; tgt.lng = m.lng; tgt.recAcc = Math.round(m.acc);
+    persist(); refreshRec(); $('shareBox').hidden = true;
+    io.speak(`${q.label} 위치를 저장했음. 걸어서 기록하면 더 정확해짐.`, 'high'); shared = null;
+  };
+  $('shareCancelBtn').onclick = () => { $('shareBox').hidden = true; shared = null; io.speak('저장하지 않았음.', 'high'); };
+  (function readShareParams() {
+    const q = new URLSearchParams(location.search);
+    const txt = [q.get('title'), q.get('text'), q.get('url')].filter(Boolean).join(' ');
+    if (!txt) return;
+    history.replaceState(null, '', location.pathname);
+    const wait = setInterval(() => { if (data) { clearInterval(wait); route = data.routes[+$('routeSel').value || 0]; handleShared(txt); } }, 200);
+  })();
+  window.__walknav_share = handleShared;
 
   function recordPoint(p) {
     if (!lastFix) { startGeo(); io.speak('GPS를 잡는 중임. 잠시 후 다시 눌러주세요.', 'high'); return; }
