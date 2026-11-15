@@ -73,7 +73,7 @@
       navigator.serviceWorker && navigator.serviceWorker.ready.then((r) =>
         r.showNotification('길동무', { body: text, tag: 'walknav', renotify: true, vibrate: [200, 100, 200] }));
     },
-    onAuto(type, f) { tripEvent('자동:' + ({ alight: '내림', board: '탑승', crossed: '건넘' }[type] || type), f && f.lat ? { at: [+f.lat.toFixed(6), +f.lng.toFixed(6)] } : {}); },
+    onAuto(type, f, why) { tripEvent('자동:' + ({ alight: '내림', board: '탑승', crossed: '건넘', back: '버스로 복귀', surface: '지상', under: '지하', stay: '목적지 주변 머묾' }[type] || type), Object.assign(f && f.lat ? { at: [+f.lat.toFixed(6), +f.lng.toFixed(6)], acc: Math.round(f.acc || 0), speed: f.speed == null ? null : +(+f.speed).toFixed(1) } : {}, why ? { why } : {})); },
     onLegChange(i, l) { refreshRec(); tripEvent('구간', { leg: i, title: l && l.title }); },
   };
   const engine = W.createEngine({ io, handsFree: set.handsFree });
@@ -431,7 +431,9 @@
     while (all.length > 6) all.shift();
     try { localStorage.setItem(LS_TRIPS, JSON.stringify(all)); } catch (e) { all.shift(); try { localStorage.setItem(LS_TRIPS, JSON.stringify(all)); } catch (e2) { /* 저장 공간 부족 */ } }
   }
-  function tripStart() { trip = { id: 'trip-' + Date.now(), routeId: route.id, routeName: route.name, start: Date.now(), track: [], events: [] }; saveTrip(); }
+  function tripStart() { trip = { id: 'trip-' + Date.now(), routeId: route.id, routeName: route.name, start: Date.now(), track: [], events: [] }; tripLastAt = 0; saveTrip(); }
+  // 경로가 바뀌었거나 2시간 넘게 지난 기록에는 이어 붙이지 않음(출근·퇴근 기록이 한 파일에 섞이지 않게)
+  const tripStale = () => !trip || trip.routeId !== route.id || Date.now() - trip.start > 2 * 3600 * 1000;
   function tripFix(f) {
     if (!trip || f.t - tripLastAt < 3000 || !(f.acc <= 60) || trip.track.length >= 4000) return;
     tripLastAt = f.t;
@@ -487,13 +489,23 @@
     try { wake = await navigator.wakeLock.request('screen'); } catch (e) { wakeFail = true; }
     if (set.noti && 'Notification' in window && Notification.permission === 'default') await Notification.requestPermission();
     const prog = loadProg();
+    const newTrip = tripStale(); if (newTrip) tripStart();   // 기록을 먼저 열어 첫 구간 사건부터 남김
     if (prog && prog.routeId === route.id) engine.restore(route, prog); else engine.start(route, 0);
     if (wakeFail) io.speak('화면이 꺼지면 안내가 멈출 수 있음. 화면을 켜 두세요.', 'queue');
-    if (!trip) { tripStart(); io.speak('이동 기록을 함께 저장함.', 'queue'); }
+    if (newTrip) io.speak('이동 기록을 함께 저장함.', 'queue');
     $('startBtn').hidden = true;   // 진행 중 실수로 눌러 처음으로 돌아가지 않게 숨김
     $('now').focus();              // 숨긴 버튼에 있던 화면낭독기 포커스를 안내 영역으로 옮김
     refreshRec(); render();
   };
+  // 화면이 꺼졌다 켜지면 화면 켜짐 유지를 다시 요청하고, 그동안 안내가 멈췄을 수 있음을 알림
+  let hiddenAt = 0;
+  document.addEventListener('visibilitychange', async () => {
+    if (document.visibilityState === 'hidden') { hiddenAt = Date.now(); return; }
+    if (!started) return;
+    try { if (!wake || wake.released) wake = await navigator.wakeLock.request('screen'); } catch (e) { /* 지원 안 함 */ }
+    if (hiddenAt && Date.now() - hiddenAt >= 10000) { tripEvent('화면 꺼짐', { sec: Math.round((Date.now() - hiddenAt) / 1000) }); io.speak('화면이 꺼져 있는 동안 안내가 멈췄었음. 지금 위치로 다시 안내함.', 'high'); engine.repeat(); }
+    hiddenAt = 0;
+  });
   $('restartBtn').onclick = () => {
     if (!confirm('처음부터 다시 안내할까요?')) return;
     localStorage.removeItem(PROG);
