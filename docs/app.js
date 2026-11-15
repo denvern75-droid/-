@@ -25,10 +25,12 @@
     speak(text, prio) {
       $('now').textContent = text;
       if (!set.voice || !('speechSynthesis' in window)) return;
-      if (prio === 'high') speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance(W.spoken(text));
-      u.lang = 'ko-KR'; u.rate = set.rate; if (koVoice) u.voice = koVoice;
-      speechSynthesis.speak(u);
+      const busy = speechSynthesis.speaking || speechSynthesis.pending;
+      if (prio === 'normal' && busy) return;     // 말하는 중이면 일반 안내는 버림(낡은 거리 안내가 늦게 나오지 않게)
+      const say = () => W.spoken(text).split(/(?<=[.?!])\s+/).filter(Boolean).forEach((s) => {   // 문장 단위로 읽어 TTS가 중간에 끊기지 않게
+        const u = new SpeechSynthesisUtterance(s); u.lang = 'ko-KR'; u.rate = set.rate; if (koVoice) u.voice = koVoice; speechSynthesis.speak(u);
+      });
+      if (prio === 'high') { speechSynthesis.cancel(); setTimeout(say, 60); } else say();   // 취소 직후 바로 말하면 누락되는 기기가 있음
     },
     vibrate(p) { if (set.vib && navigator.vibrate) navigator.vibrate(p); },
     beep(freq) {
@@ -76,12 +78,12 @@
     if (!navigator.geolocation) { io.speak('이 기기는 위치 기능을 지원하지 않음', 'high'); return; }
     watchId = navigator.geolocation.watchPosition((p) => {
       rawFix = { lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy,
-        heading: p.coords.heading, speed: p.coords.speed || 0, t: Date.now() };
+        heading: p.coords.heading, speed: Number.isFinite(p.coords.speed) ? p.coords.speed : null, t: Date.now() };
       recSample(rawFix);                 // 기록은 원시 값으로(이중 평활 방지)
       lastFix = kf.update(rawFix);       // 안내는 칼만 평활 값으로
       if (learner) learner.onFix(lastFix);
       engine.onFix(lastFix); render();
-    }, (e) => io.speak('위치 오류: ' + e.message + '. 위치 권한과 GPS를 확인해 주세요.', 'high'),
+    }, (e) => io.speak(e.code === 1 ? '위치 권한이 꺼져 있음. 설정에서 위치 권한을 허용해 주세요.' : e.code === 2 ? '위치를 잡을 수 없음. GPS를 켜고 하늘이 트인 곳으로 이동해 주세요.' : '위치 확인이 늦어지고 있음. 잠시 기다려 주세요.', 'high'),
     { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
   }
   async function startCompass() {
@@ -112,8 +114,9 @@
     if (!data) data = await (await fetch('route.json', { cache: 'no-cache' })).json();
     const sel = $('routeSel'); sel.innerHTML = '';
     data.routes.forEach((r, i) => { const o = document.createElement('option'); o.value = i; o.textContent = r.name; sel.appendChild(o); });
+    data.routes.forEach((rt) => rt.legs.forEach((l) => (l.points || []).forEach((p) => { if (W.hasXY(p) && !(p.samples && p.samples.length) && p.weak === undefined) p.weak = true; }))); // 출처를 모르는 좌표는 지도 기준(약함)으로 취급
     route = data.routes[0];
-    refreshRec();
+    refreshRec(); refreshStartBtn();
   }
   const persist = () => localStorage.setItem(LS_ROUTE, JSON.stringify(data));
 
@@ -185,9 +188,17 @@
     if (!tgt) return;
     seedExisting(tgt);
     tgt.samples = tgt.samples || [];
+    if (W.hasXY(tgt)) {     // 기존 위치와 크게 다른 학습 값은 오감지일 수 있어 병합하지 않고 보류함
+      const walkedBefore = tgt.samples.some((q) => !q.src || q.src === 'walk');
+      const dd = W.dist(tgt, e);
+      if (dd > (walkedBefore ? 100 : 150)) {
+        (tgt.quarantine = tgt.quarantine || []).push({ lat: e.lat, lng: e.lng, acc: e.acc, t: Date.now() }); persist();
+        io.speak(`${tgt.name || '이'} 지점 기록이 기존 위치와 ${W.fmtDist(dd)} 달라 반영하지 않고 보류했음.`, 'queue'); return;
+      }
+    }
     tgt.samples.push({ lat: e.lat, lng: e.lng, acc: e.acc, t: Date.now(), src: 'walk' });
     const m = W.robustFuse(tgt.samples);
-    tgt.lat = m.lat; tgt.lng = m.lng; tgt.recAcc = Math.round(m.acc); markWeak(tgt);
+    tgt.lat = m.lat; tgt.lng = m.lng; tgt.recAcc = Math.round(m.acc); markWeak(tgt); if (m.conflict) tgt.weak = true;
     persist(); refreshRec();
   }
   function applyLearnedLeg(e) {
@@ -209,9 +220,9 @@
     if (learner) return stopLearn('학습 보행을 중지했음. 지금까지 기록된 내용은 저장되어 있음.');
     route = data.routes[+$('routeSel').value];
     startGeo(); startCompass();
-    try { wake = await navigator.wakeLock.request('screen'); } catch (e) {}
+    try { wake = await navigator.wakeLock.request('screen'); } catch (e) { io.speak('화면이 꺼지면 안내가 멈출 수 있음. 화면을 켜 두세요.', 'queue'); }
     learner = WL.createLearner({ route,
-      say: (t) => io.speak(t, 'normal'),
+      say: (t) => io.speak(t, 'queue'),
       onPoint: applyLearnedPoint, onLegDone: applyLearnedLeg,
       onDone: () => stopLearn() });
     $('learnBtn').textContent = '학습 보행 중지';
@@ -289,15 +300,15 @@
     }
     const pts = savePoints();
     const sel = $('shareTarget'); sel.innerHTML = '';
-    let best = 0, bs = -1;
+    let best = 0, bs = -1, second = -1;
     const ph = document.createElement('option'); ph.value = -1; ph.textContent = '지점을 선택해 주세요'; sel.appendChild(ph); // 직접 고르기 전에는 저장 불가
-    pts.forEach((q, i) => { const o = document.createElement('option'); o.value = i; o.textContent = q.label; sel.appendChild(o); const sc = LK.similarity(r.name, q.label); if (sc > bs) { bs = sc; best = i; } });
-    if (bs >= 0.5) sel.value = best;
+    pts.forEach((q, i) => { const o = document.createElement('option'); o.value = i; o.textContent = q.label; sel.appendChild(o); const sc = LK.similarity(r.name, q.label); if (sc > bs) { second = bs; bs = sc; best = i; } else if (sc > second) second = sc; });
+    const sure = bs >= 0.5 && bs - second >= 0.15;   // 출구와 정류장처럼 이름이 비슷한 후보가 여럿이면 자동 선택하지 않음
+    if (sure) sel.value = best;
     $('shareSaveBtn').hidden = false; sel.hidden = false;
     const nm = r.name ? r.name + ', ' : '';
     $('shareMsg').textContent = `받은 위치: ${nm}위도 ${r.lat.toFixed(5)}, 경도 ${r.lng.toFixed(5)}. 지도 앱의 위치는 건물이나 장소 중심이라 출구·정류장과 수 미터 어긋날 수 있음.`;
-    io.speak(`공유를 받았음. ${nm}위치를 읽었음. ` + (bs >= 0.5 ? `${pts[best].label} 지점으로 저장할까요. 맞으면 이 지점으로 저장을 누르세요.` : '저장할 지점을 고른 뒤 저장을 누르세요.'), 'high');
-    box.querySelector('h2').focus();
+    io.speak(`공유를 받았음. ${nm}위치를 읽었음. ` + (sure ? `${pts[best].label} 지점으로 저장할까요. 맞으면 이 지점으로 저장을 누르세요.` : '저장할 지점을 고른 뒤 저장을 누르세요.'), 'high');
   }
   $('shareSaveBtn').onclick = () => {
     if (!shared || !shared.ok) return;
@@ -386,19 +397,33 @@
 
   // ---------- 버튼 ----------
   $('routeSel').onchange = (e) => { route = data.routes[+e.target.value]; refreshRec(); };
+  const PROG = 'walknav.prog.v1';
+  const loadProg = () => { try { const q = JSON.parse(localStorage.getItem(PROG) || 'null'); return q && Date.now() - q.t < 12 * 3600 * 1000 ? q : null; } catch (e) { return null; } };
+  const saveProg = () => { if (!started || !route) return; const s = engine.snapshot(); if (s) localStorage.setItem(PROG, JSON.stringify(Object.assign({ routeId: route.id, t: Date.now() }, s))); else if (engine.status().legIndex >= (route.legs || []).length) localStorage.removeItem(PROG); };
+  const refreshStartBtn = () => { $('startBtn').textContent = loadProg() ? '이어서 안내 시작' : '안내 시작'; };
+  setInterval(saveProg, 2000);
   $('startBtn').onclick = async () => {
     route = data.routes[+$('routeSel').value];
     started = true; startGeo(); startCompass();
-    try { wake = await navigator.wakeLock.request('screen'); } catch (e) {}
+    try { wake = await navigator.wakeLock.request('screen'); } catch (e) { io.speak('화면이 꺼지면 안내가 멈출 수 있음. 화면을 켜 두세요.', 'queue'); }
     if (set.noti && 'Notification' in window && Notification.permission === 'default') await Notification.requestPermission();
-    engine.start(route, 0); refreshRec(); render();
-    $('startBtn').textContent = '처음부터 다시 시작';
+    const prog = loadProg();
+    if (prog && prog.routeId === route.id) engine.restore(route, prog); else engine.start(route, 0);
+    $('startBtn').hidden = true;   // 진행 중 실수로 눌러 처음으로 돌아가지 않게 숨김
+    refreshRec(); render();
+  };
+  $('restartBtn').onclick = () => {
+    if (!confirm('처음부터 다시 안내할까요?')) return;
+    localStorage.removeItem(PROG);
+    if (started) engine.start(route, 0); else { $('startBtn').hidden = false; refreshStartBtn(); io.speak('저장된 진행 위치를 지웠음.', 'high'); }
   };
   $('repeatBtn').onclick = () => engine.repeat();
   $('now').onclick = () => engine.repeat();
   $('nextBtn').onclick = () => { engine.next(); render(); };
-  $('prevBtn').onclick = () => { engine.prevLeg(); render(); };
-  $('skipBtn').onclick = () => { engine.skipLeg(); render(); };
+  const armed = {};
+  const twice = (key, fn, msg) => () => { const t = Date.now(); if (armed[key] && t - armed[key] < 5000) { armed[key] = 0; fn(); render(); } else { armed[key] = t; io.speak(msg, 'high'); } };
+  $('prevBtn').onclick = twice('prev', () => engine.prevLeg(), '이전 단계로 돌아갑니다. 맞으면 5초 안에 한 번 더 누르세요.');
+  $('skipBtn').onclick = twice('skip', () => engine.skipLeg(), '이 단계를 건너뜁니다. 맞으면 5초 안에 한 번 더 누르세요.');
   $('shareBtn').onclick = async () => {
     if (!lastFix) return io.speak('아직 위치를 잡지 못했음', 'high');
     const url = `https://maps.google.com/?q=${lastFix.lat},${lastFix.lng}`;
@@ -409,15 +434,14 @@
   $('voiceCmdBtn').onclick = () => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) return io.speak('이 브라우저는 음성 명령을 지원하지 않음', 'high');
+    if ('speechSynthesis' in window) speechSynthesis.cancel();   // 앱 음성을 인식기가 다시 듣지 않도록
     const r = new SR(); r.lang = 'ko-KR'; r.maxAlternatives = 3;
     r.onresult = (ev) => {
       const t = ev.results[0][0].transcript;
       if (/다시|반복/.test(t)) engine.repeat();
-      else if (/다음|도착|역/.test(t)) engine.next();
-      else if (/이전|뒤로/.test(t)) engine.prevLeg();
-      else if (/건너|스킵/.test(t)) engine.skipLeg();
       else if (/위치|도움/.test(t)) $('shareBtn').click();
-      else io.speak(`"${t}" 명령을 이해하지 못했음. 다시, 다음, 이전, 건너뛰기, 위치 중에서 말씀해 주세요.`, 'high');
+      else if (/다음|도착/.test(t)) engine.next();     // 되돌릴 수 없는 이전·건너뛰기는 음성 명령에서 제외, '역'만으로는 반응하지 않음(오인식 방지)
+      else io.speak('명령을 이해하지 못했음. 다시, 다음, 위치 중에서 말씀해 주세요.', 'high');
       render();
     };
     r.onerror = () => io.speak('음성 인식 실패', 'high');
@@ -425,12 +449,12 @@
   };
 
   // 설정
-  $('voiceOn').checked = set.voice; $('rate').value = set.rate; $('rateV').textContent = set.rate;
+  $('voiceOn').checked = set.voice; $('rate').value = set.rate; $('rate').setAttribute('aria-valuetext', '속도 ' + set.rate + '배');
   $('vibOn').checked = set.vib; $('beepOn').checked = set.beep; $('beaconOn').checked = set.beacon; $('notiOn').checked = set.noti;
   const syncLive = () => $('now').setAttribute('aria-live', set.voice ? 'off' : 'polite'); // 앱 음성이 꺼지면 화면낭독기가 대신 읽음
   $('voiceOn').onchange = (e) => { set.voice = e.target.checked; saveSet(); syncLive(); };
   syncLive();
-  $('rate').oninput = (e) => { set.rate = +e.target.value; $('rateV').textContent = set.rate; saveSet(); };
+  $('rate').oninput = (e) => { set.rate = +e.target.value; e.target.setAttribute('aria-valuetext', '속도 ' + set.rate + '배'); saveSet(); };
   $('vibOn').onchange = (e) => { set.vib = e.target.checked; saveSet(); };
   $('beepOn').onchange = (e) => { set.beep = e.target.checked; saveSet(); };
   $('beaconOn').onchange = (e) => { set.beacon = e.target.checked; saveSet(); };

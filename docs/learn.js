@@ -169,6 +169,8 @@
             const run = buf.filter((b) => b.t >= walkRunStart && b.acc <= C.goodAcc).slice(0, 3);
             const p = W.medianPoint(run);
             const j = nextWalkIndex(li);
+            const firstKnown = j >= 0 ? legs[j].points[0] : null;
+            if (hasXY(firstKnown) && W.dist(p, firstKnown) > 300) { walkRunStart = null; return; }   // 알려진 출구와 300m 넘게 떨어지면 출구가 아님(집 근처 보행 등 오감지 방지)
             if (j >= 0) {
               li = j; const first = L().points[0];
               if (first && first.kind === 'exit') {
@@ -186,7 +188,7 @@
           const dcl = declared(l);
           const need = dcl ? dcl * C.minLegFrac : 40;
           const st = stationaryFor(last.kind === 'dest' ? C.destSec : C.stopSec);
-          if (st && walked >= need) {
+          if (st && walked >= need && !(hasXY(last) && W.dist(st, last) > 120)) {   // 알려진 위치에서 120m 넘게 떨어진 곳의 정지(신호 대기 등)는 기록하지 않음
             onPoint({ legIndex: li, id: last.id, lat: st.lat, lng: st.lng, acc: st.acc });
             say(`${last.name} 위치를 기록했음.`);
             finishWalk(st);
@@ -206,6 +208,8 @@
             const win = buf.filter((b) => b.t >= lastFastT - 2000 && b.t <= lastFastT + 8000);
             const p = win.length ? W.medianPoint(win) : fx;
             const l = L();
+            const nl = legs[li + 1], dst = nl && nl.type === 'walk' ? nl.points[nl.points.length - 1] : null;
+            if (hasXY(dst) && W.dist(p, dst) > (declared(nl) || 500) + 150) { walkRunStart = null; return; }   // 도착지에서 너무 먼 서행(정체 등)은 하차가 아님
             onPoint({ legIndex: li, id: 'alight', lat: p.lat, lng: p.lng, acc: p.acc });
             say(`${(l.alight && l.alight.name) || '하차 정류장'} 위치를 기록했음. 사무실 방향으로 걸어가세요.`);
             const j = li + 1;
@@ -229,6 +233,7 @@
         if (last && last.kind === 'entrance' && lost && walked >= 15) {
           const pts = buf.filter((b) => b.acc <= C.goodAcc && b.t >= lastGoodAt - 10000);
           const p = W.medianPoint(pts.length ? pts : [lastGood]);
+          if (hasXY(last) && W.dist(p, last) > 150) return;   // 알려진 입구와 150m 넘게 떨어진 GPS 끊김(단지·캐노피 등)은 입구가 아님
           onPoint({ legIndex: li, id: last.id, lat: p.lat, lng: p.lng, acc: p.acc });
           say(`${last.name} 위치를 기록했음.`);
           finishWalk(p);

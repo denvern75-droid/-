@@ -60,7 +60,8 @@
     if (d < 20) return `${Math.max(1, Math.round(d))}미터`;
     if (d < 100) return `${Math.round(d / 5) * 5}미터`;
     if (d < 1000) return `${Math.round(d / 10) * 10}미터`;
-    return `${(d / 1000).toFixed(1)}킬로미터`;
+    const km = d / 1000;
+    return Math.abs(km - Math.round(km)) < 0.05 ? `${Math.round(km)}킬로미터` : `${km.toFixed(1)}킬로미터`;
   }
   // 기기 방향 센서 → 나침반 방위(진행방향). 평평하게 들면 윗면, 세워 들면 뒷면 기준
   function compassHeading(alpha, beta, gamma) {
@@ -134,6 +135,13 @@
     const pos = fromLocal(ref, { x: sx / sw, y: sy / sw });
     const out = Object.assign(pos, { acc: Math.max(3, 1 / Math.sqrt(sw)), used: keep.length, rejected: n - keep.length });
     out.spread = Math.max(...keep.map((i) => Math.hypot(loc[i].x - sx / sw, loc[i].y - sy / sw)));
+    out.acc = Math.max(out.acc, out.spread);              // 서로 어긋난 측정을 평균 내고도 정확하다고 말하지 않음
+    const sg = keep.map((i) => sig[i]), ratio = Math.max(...sg) / Math.min(...sg);
+    out.conflict = false;
+    if (keep.length >= 2 && out.spread > Math.max(15, 2 * Math.min(...sg)) && ratio < 3) {   // 비슷한 정확도인데 서로 15m 넘게 어긋남(예: 도로 양쪽)
+      const last = loc[Math.max(...keep)], pl = fromLocal(ref, last);   // 두 군집의 평균(도로 한가운데)을 쓰지 않고 가장 최근 값을 사용
+      out.lat = pl.lat; out.lng = pl.lng; out.conflict = true;
+    }
     return out;
   }
 
@@ -146,40 +154,48 @@
     const q = ((opts && opts.accelStd) || 1.2) ** 2;
     let ref = null, st = null, lastT = 0, bad = 0;
     const mk = (z, r) => ({ x: z.x, v: 0, p00: r, p01: 0, p11: 4 });
-    function step(f, dt, z, r) {
+    function predict(f, dt) {
       f.x += f.v * dt;
       const a = f.p00 + 2 * dt * f.p01 + dt * dt * f.p11 + (q * dt ** 4) / 4;
       const b = f.p01 + dt * f.p11 + (q * dt ** 3) / 2;
       const c = f.p11 + q * dt * dt;
-      const S = a + r, K0 = a / S, K1 = b / S, y = z - f.x;
-      const gate = Math.abs(y) > 4 * Math.sqrt(S);
-      f.x += K0 * y; f.v += K1 * y;
-      f.p00 = a - K0 * a; f.p01 = b - K0 * b; f.p11 = c - K1 * b;
-      return gate;
+      f.p00 = a; f.p01 = b; f.p11 = c;
     }
+    const innov = (f, z, r) => Math.abs(z - f.x) / Math.sqrt(f.p00 + r);
+    function correct(f, z, r) {
+      const S = f.p00 + r, K0 = f.p00 / S, K1 = f.p01 / S, y = z - f.x, a = f.p00, b = f.p01;
+      f.x += K0 * y; f.v += K1 * y;
+      f.p00 = a - K0 * a; f.p01 = b - K0 * b; f.p11 = f.p11 - K1 * b;
+    }
+    let fast = 0; // 보행 속도(1.2m/s 이상)가 연속 확인된 횟수
     function update(fix) {
       const t = fix.t || Date.now();
       const r = Math.max(fix.acc || 10, 3) ** 2;
       if (!ref || !st || t - lastT > 15000) {
         ref = { lat: fix.lat, lng: fix.lng }; const z = toLocal(ref, fix);
-        st = { x: mk({ x: z.x }, r), y: mk({ x: z.y }, r) }; lastT = t; bad = 0;
+        st = { x: mk({ x: z.x }, r), y: mk({ x: z.y }, r) }; lastT = t; bad = 0; fast = 0;
         return Object.assign({}, fix);
       }
       const dt = Math.min(Math.max((t - lastT) / 1000, 0.2), 10); lastT = t;
       const z = toLocal(ref, fix);
-      const g = step(st.x, dt, z.x, r) | step(st.y, dt, z.y, r);
-      bad = g ? bad + 1 : 0;
-      if (bad >= 3) { ref = { lat: fix.lat, lng: fix.lng }; const z0 = toLocal(ref, fix); st = { x: mk({ x: z0.x }, r), y: mk({ x: z0.y }, r) }; bad = 0; }
+      predict(st.x, dt); predict(st.y, dt);
+      const gated = innov(st.x, z.x, r) > 4 || innov(st.y, z.y, r) > 4;   // 4σ 밖의 측정: 튄 값으로 보고 반영하지 않음
+      if (gated) {
+        bad++;
+        if (bad >= 3) { ref = { lat: fix.lat, lng: fix.lng }; const z0 = toLocal(ref, fix); st = { x: mk({ x: z0.x }, r), y: mk({ x: z0.y }, r) }; bad = 0; fast = 0; } // 3회 연속이면 실제 이동으로 보고 재초기화
+      } else { bad = 0; correct(st.x, z.x, r); correct(st.y, z.y, r); }
       const pos = fromLocal(ref, { x: st.x.x, y: st.y.x });
       const sp = Math.hypot(st.x.v, st.y.v);
+      fast = (!gated && sp >= 1.2) ? fast + 1 : (sp >= 1.2 ? fast : 0);
+      const conf = fast >= 3;
       const hd = (deg(Math.atan2(st.x.v, st.y.v)) + 360) % 360; // 북=0, 동=90
       return Object.assign({}, fix, {
-        lat: pos.lat, lng: pos.lng, acc: Math.max(3, Math.sqrt(st.x.p00)),
-        speed: fix.speed > 0 ? fix.speed : sp,
-        heading: Number.isFinite(fix.heading) ? fix.heading : (sp >= 0.7 ? hd : null),
+        lat: pos.lat, lng: pos.lng, acc: Math.max(3, Math.sqrt(st.x.p00)) + (gated ? (fix.acc || 10) * 0.5 : 0),
+        speed: Number.isFinite(fix.speed) ? fix.speed : (conf ? sp : 0),            // 기기가 속도를 주면(0 포함) 그 값을 신뢰함
+        heading: (Number.isFinite(fix.heading) && fix.speed >= 0.7) ? fix.heading : (!Number.isFinite(fix.speed) && conf ? hd : null), // 속도를 모를 때만 추정 방향 사용
       });
     }
-    return { update, reset() { ref = null; st = null; } };
+    return { update, reset() { ref = null; st = null; fast = 0; } };
   }
 
   // 음성(TTS)·화면낭독용 문장 정리: 낭독에서 오독되는 표기를 소리 나는 대로 바꿈
@@ -188,19 +204,21 @@
       .replace(/(\d)\s*-\s*(\d)/g, '$1의 $2')               // 8-3 → 8의 3
       .replace(/\b(\d{5})\b/g, (m) => m.split('').join(' ')) // 정류장 번호 21002 → 2 1 0 0 2 (한 자리씩)
       .replace(/[·•・]/g, ', ')                                 // 51·5602 → 51, 5602
+      .replace(/\(약\s*(\d+)\s*도\)/g, ' 약 $1도')                // (약 85도) → 약 85도 (조사가 끊겨 읽히지 않게)
+      .replace(/([가-힣A-Za-z])\.([가-힣A-Za-z])/g, '$1 $2')           // 문성초등학교.금천가족문화센터 → 마침표 없이
       .replace(/[()（）]/g, ', ')                               // 괄호는 쉼표로
       .replace(/[→▶◀▷]/g, ', ')
       .replace(/\s*,(\s*,)+/g, ',').replace(/,\s*([.?!])/g, '$1').replace(/\s+/g, ' ').replace(/,\s*$/, '').trim();
   }
 
-  // ---------- 진동 패턴 (좌 짧짧 / 우 짧짧짧 / 정방향 짧 1 / 유턴 길길길 / 도착 길게) ----------
+  // ---------- 진동 패턴: [진동, 쉼, 진동, ...] 순서. 정방향 1회 / 왼쪽 2회 / 오른쪽 3회 / 유턴 길게 3회 / 도착 길게 1회 / 경고 아주 짧게 5회 ----------
   const PAT = {
-    ahead: [50],
-    left: [90, 90, 90],
-    right: [90, 90, 90, 90, 90],
-    back: [400, 120, 400, 120, 400],
-    arrive: [900],
-    warn: [200, 100, 200, 100, 200],
+    ahead: [160],
+    left: [150, 110, 150],
+    right: [150, 110, 150, 110, 150],
+    back: [450, 150, 450, 150, 450],
+    arrive: [1000],
+    warn: [60, 60, 60, 60, 60, 60, 60, 60, 60],
   };
 
   const hasXY = (p) => p && typeof p.lat === 'number' && typeof p.lng === 'number';
@@ -210,7 +228,7 @@
     const io = opts.io;
     const now = opts.now || (() => Date.now());
     const C = Object.assign({
-      guideEveryMeters: 25, guideEverySec: 20, cueGapSec: 4, offRouteM: 25,
+      guideEveryMeters: 25, guideEverySec: 20, cueGapSec: 8, offRouteM: 25,
       offRouteGapSec: 25, overshootM: 18, defaultRadius: 12, accCap: 30, beepRangeM: 30,
     }, opts.config || {});
 
@@ -218,9 +236,10 @@
       route: null, li: -1, pi: 0, fix: null, compass: null, track: [],
       stIdx: 0, last: '', minD: Infinity,
       lastGuideAt: 0, lastGuidePos: null, lastCls: null, lastCueAt: 0,
-      lastOffAt: 0, lastOverAt: 0, lastBeepAt: 0, lastBeacon: 0, pre: {}, warnedMissing: null, busStage: 0,
+      lastOffAt: 0, lastOverAt: 0, lastBeepAt: 0, lastBeacon: 0, pre: {}, inCnt: 0, pendCls: null, clsStreak: 0, lastFixAt: 0, gpsLost: false, busNoteAt: 0, offRoute: false, farWarned: false, busMin: null, busFar: false, warnedMissing: null, busStage: 0,
     };
 
+    const isWeak = (p) => !!p && p.weak === true;   // 걸어서 확인되지 않은 지도 기준 좌표
     const leg = () => (S.route ? S.route.legs[S.li] : null);
     const target = () => { const l = leg(); return l && l.type === 'walk' ? l.points[S.pi] : null; };
 
@@ -231,22 +250,21 @@
     }
 
     function currentHeading() {
-      const t = now(), f = S.fix;
-      if (f && Number.isFinite(f.heading) && f.speed >= 1.0) return { val: f.heading, src: '걷는 방향(GPS)' };
-      // 최근 이동 궤적으로 방향 추정
-      const tr = S.track;
-      if (tr.length >= 2) {
-        const a = tr[0], b = tr[tr.length - 1];
-        if (b.t - a.t <= 15000 && dist(a, b) >= 6) return { val: bearing(a, b), src: '이동 궤적' };
-      }
+      const t = now(), f = S.fix, moving = !!f && f.speed >= 1.0;
+      if (moving && Number.isFinite(f.heading)) return { val: f.heading, src: '걷는 방향(GPS)' };
       if (S.compass && t - S.compass.t < 3000) return { val: S.compass.val, src: '나침반' };
+      const tr = S.track;
+      if (moving && tr.length >= 2) {            // 정지 중 GPS 잡음으로 방향을 만들지 않도록 이동 중이고 정확도보다 충분히 멀 때만
+        const a = tr[0], b = tr[tr.length - 1];
+        if (b.t - a.t <= 15000 && dist(a, b) >= Math.max(12, 3 * (f.acc || 5))) return { val: bearing(a, b), src: '이동 궤적' };
+      }
       return null;
     }
 
     function relTo(p) {
       const f = S.fix; if (!f || !hasXY(p)) return null;
       const b = bearing(f, p), h = currentHeading();
-      if (!h) return { b, d: dist(f, p), ck: null, h: null, text: `${cardinal(b)}(방향 센서 대기 중)` };
+      if (!h) return { b, d: dist(f, p), ck: null, h: null, text: '방향을 알 수 없음. 앞으로 몇 걸음 걸으면 방향을 알려줌' };
       const ck = clock(norm180(b - h.val));
       return { b, d: dist(f, p), ck, h, text: ck.text };
     }
@@ -256,20 +274,24 @@
       const r = relTo(t); if (!r) return;
       S.lastGuideAt = now(); S.lastGuidePos = { lat: S.fix.lat, lng: S.fix.lng };
       S.lastCls = r.ck ? r.ck.cls : null;
-      say(`${t.name}까지 ${fmtDist(r.d)}, ${r.text}`, reason === 'repeat' ? 'high' : 'normal');
+      say(`${t.name}까지 ${isWeak(t) ? '대략 ' : ''}${fmtDist(r.d)}, ${r.text}`, reason === 'repeat' ? 'high' : 'normal');
       if (r.ck) io.vibrate(r.ck.cls === 'ahead' ? PAT.ahead : r.ck.cls.startsWith('left') ? PAT.left : r.ck.cls === 'back' ? PAT.back : PAT.right);
     }
 
     function legIntro(l, i) {
-      const head = `${i + 1}단계. ${l.title}.`;
+      const head = `${l.title}.`;
       if (l.type === 'walk') {
-        const miss = l.points.filter((p) => !hasXY(p)).length;
-        const weak = l.points.filter((p) => hasXY(p) && (p.weak === true || !(p.samples && p.samples.length))).length; // 걸어서 확인되지 않은 지점
-        return `${head} ${l.intro || ''}` + (l.learned && l.learned.text ? ` 걸었던 기록: ${l.learned.text}.` : '') + (miss ? ` 주의, 좌표가 기록되지 않은 지점이 ${miss}개 있음.` : '') + (weak ? ' 주의, 위치가 지도 데이터 기준이라 오차가 있을 수 있음. 주변 소리와 표지판을 함께 확인하세요.' : '');
+        const weak = l.points.filter((p) => hasXY(p) && isWeak(p)).length;
+        return `${head} ${l.intro || ''}` + (l.learned && l.learned.text ? ` 걸었던 기록: ${l.learned.text}.` : '') + (weak ? ' 주의, 위치가 지도 데이터 기준이라 오차가 있을 수 있음. 주변 소리와 표지판을 함께 확인하세요.' : '');
       }
       if (l.type === 'subway') {
-        const n = l.stations ? l.stations.length - 1 : null;
-        return `${head} ${l.intro || ''}` + (n ? ` 총 ${n}개 역 이동. 역에 설 때마다 역 도착 버튼을 누르면 남은 역 수를 알려줌.` : '');
+        const hasCount = /\d+개 역/.test(l.intro || '');
+        return `${head} ${l.intro || ''}` + (l.stations && l.stations.length > 1 ? ` ${hasCount ? '' : `총 ${l.stations.length - 1}개 역 이동. `}역에 설 때마다 다음 버튼을 누르면 남은 역 수를 알려줌.` : '');
+      }
+      if (l.type === 'bus') {
+        const nl = S.route.legs[i + 1], dst = nl && nl.type === 'walk' ? nl.points[nl.points.length - 1] : null;
+        const none = !hasXY(l.alight) && !hasXY(dst);
+        return `${head} ${l.intro || ''}` + (none ? ' 하차 위치 정보가 없음. 안내방송과 승객에게 정류장 이름을 확인하고, 내린 뒤 다음 버튼을 누르세요.' : '');
       }
       return `${head} ${l.intro || ''}`;
     }
@@ -281,22 +303,25 @@
         io.vibrate(PAT.arrive); return;
       }
       S.li = i; S.pi = 0; S.stIdx = 0; S.minD = Infinity; S.busStage = 0;
-      S.lastGuidePos = null; S.lastGuideAt = 0; S.warnedMissing = null;
+      S.lastGuidePos = null; S.lastGuideAt = 0; S.warnedMissing = null; S.inCnt = 0; S.busMin = null; S.busFar = false; S.busNoteAt = 0; S.offRoute = false; S.farWarned = false;
       const l = leg();
-      say((prefix ? prefix + ' ' : '') + legIntro(l, i), 'high');
+      if (prefix) { say(prefix, 'high'); say(legIntro(l, i), 'queue'); }   // 급한 말을 먼저, 소개는 이어서(짧은 두 번의 낭독)
+      else say(legIntro(l, i), 'high');
       if (io.onLegChange) io.onLegChange(i, l);
     }
 
     function arrive(p) {
       io.vibrate(PAT.arrive);
-      S.minD = Infinity; S.lastGuidePos = null; S.lastGuideAt = 0;
-      const msg = `${p.name} 도착. ${p.say || ''}`.trim();
+      S.minD = Infinity; S.lastGuidePos = null; S.lastGuideAt = 0; S.inCnt = 0;
+      const msg = (isWeak(p) ? `${p.name} 부근에 도착함. 지도 기준 위치라 오차가 있으니 표지판과 주변 소리로 확인하세요. ${p.say || ''}` : `${p.name} 도착. ${p.say || ''}`).trim();
       if (S.pi >= leg().points.length - 1) enterLeg(S.li + 1, msg);
       else { S.pi++; say(msg, 'high'); }
     }
 
     // ---------- 외부 입력 ----------
     function onFix(fix) {
+      if (S.gpsLost) { S.gpsLost = false; say('GPS 신호가 돌아왔음.', 'queue'); }
+      S.lastFixAt = now();
       S.fix = fix;
       S.track.push({ lat: fix.lat, lng: fix.lng, t: fix.t || now() });
       while (S.track.length > 12 || (S.track.length > 2 && S.track[S.track.length - 1].t - S.track[0].t > 15000)) S.track.shift();
@@ -315,8 +340,10 @@
       }
       const tNow = now();
       const d = dist(fix, t);
-      const radius = Math.max(t.radius || C.defaultRadius, Math.min(fix.acc || 0, C.accCap));
-      if (d <= radius) return arrive(t);
+      if (S.pi === 0 && !S.farWarned && d > 1500) { S.farWarned = true; io.vibrate(PAT.warn); say(`현재 위치가 ${t.name}에서 ${fmtDist(d)} 떨어져 있음. 아직 도착하지 않았을 수 있으니 안내방송과 주변을 확인하세요.`, 'high'); }
+      const weak = isWeak(t);
+      const radius = Math.max(t.radius || C.defaultRadius, Math.min(fix.acc || 0, C.accCap), weak ? 30 : 0); // 지도 기준 좌표는 오차 30m를 반영
+      if (d <= radius) { S.inCnt++; const need = weak ? (fix.acc <= 10 ? 1 : 2) : (d <= radius * 0.5 ? 1 : d <= radius * 0.8 ? 2 : 3); if (S.inCnt >= need) return arrive(t); } else S.inCnt = 0; // 튄 측정이나 스치는 잡음으로 도착 처리하지 않음
 
       // 오디오 비콘(좌우 스테레오): 목적지가 있는 쪽 귀에서 소리가 남. 이어폰 사용 시 효과적
       if (io.beacon && tNow - S.lastBeacon >= 1200) {
@@ -332,7 +359,10 @@
       }
       const endKind = ['stop', 'dest', 'entrance', 'exit'].includes(t.kind);
       if (d < S.minD) S.minD = d;
-      else if (endKind && S.minD < 45 && d > S.minD + C.overshootM && tNow - S.lastOverAt > 15000) {
+      else if ((t.kind === 'turn' || t.kind === 'crossing') && S.minD < 40 && d > S.minD + 15 && S.pi < l.points.length - 1) {
+        S.pi++; S.minD = Infinity; S.lastGuidePos = null; S.inCnt = 0; return; // 꺾는 곳·횡단보도를 스쳐 지나갔으면 되돌아가라 하지 않고 다음 지점으로
+      }
+      else if (endKind && !weak && S.minD < 45 && d > S.minD + C.overshootM && tNow - S.lastOverAt > 15000) {
         S.lastOverAt = tNow; io.vibrate(PAT.back);
         const r = relTo(t);
         say(`지나친 것 같음. 멈추고 ${t.name} 쪽으로 돌아가야 함. ${fmtDist(d)}, ${r ? r.text : ''}`, 'high');
@@ -341,10 +371,11 @@
       }
       // 경로 이탈 (이전 지점이 있을 때)
       const prev = S.pi > 0 ? l.points[S.pi - 1] : l.start;
-      if (hasXY(prev)) {
+      if (hasXY(prev) && !weak && !isWeak(prev)) {   // 약한 좌표로는 이탈 경고를 하지 않음(오경보가 도로 방향 유도로 이어질 수 있음)
         const sd = segDist(fix, prev, t);
+        if (S.offRoute && sd <= Math.max(10, fix.acc || 0)) { S.offRoute = false; say('경로로 돌아왔음.', 'queue'); }
         if (sd > Math.max(C.offRouteM, (fix.acc || 0) * 1.5) && tNow - S.lastOffAt > C.offRouteGapSec * 1000) {
-          S.lastOffAt = tNow; io.vibrate(PAT.warn);
+          S.offRoute = true; S.lastOffAt = tNow; io.vibrate(PAT.warn);
           const r = relTo(t);
           say(`경로에서 ${fmtDist(sd)} 벗어났음. ${t.name} 쪽은 ${r ? r.text : ''}, ${fmtDist(d)}`, 'high');
           S.lastGuideAt = tNow; S.lastGuidePos = { lat: fix.lat, lng: fix.lng };
@@ -365,11 +396,14 @@
       const r = relTo(t);
       const cls = r && r.ck ? r.ck.cls : null;
       const first = !S.lastGuidePos;
+      const moving = fix.speed >= 0.9;
+      if (cls === S.pendCls) S.clsStreak++; else { S.pendCls = cls; S.clsStreak = 1; }
       const gotHeading = !first && S.lastCls === null && cls !== null; // 첫 안내가 방향 없이 나갔다면 방향 확보 즉시 재안내
-      if (first || gotHeading || moved >= C.guideEveryMeters || (tNow - S.lastGuideAt >= C.guideEverySec * 1000 && moved >= 5)) {
+      if (first || gotHeading || (moving && (moved >= C.guideEveryMeters || (tNow - S.lastGuideAt >= C.guideEverySec * 1000 && moved >= 5)))) {
         return guide('auto');
       }
-      if (cls && cls !== S.lastCls && tNow - S.lastCueAt >= C.cueGapSec * 1000 && moved >= 3) {
+      const wrongWay = moving && cls === 'back' && S.clsStreak >= 3 && tNow - S.lastCueAt >= C.cueGapSec * 1000; // 알려 준 반대 방향으로 계속 걸으면 8초마다 다시 알림
+      if (wrongWay || moving && cls && cls !== S.lastCls && S.clsStreak >= 2 && tNow - S.lastCueAt >= (cls === 'ahead' ? 20000 : C.cueGapSec * 1000) && moved >= 3) { // 같은 방향이 연속 2회일 때만(잡음으로 인한 번복 방지)
         S.lastCueAt = tNow; S.lastCls = cls;
         const short = { ahead: '정면, 맞게 가는 중', 'left-s': '조금 왼쪽', 'right-s': '조금 오른쪽', 'left-m': '왼쪽으로 꺾기', 'right-m': '오른쪽으로 꺾기', 'left-b': '왼쪽 뒤쪽', 'right-b': '오른쪽 뒤쪽', back: '반대 방향, 유턴' }[cls];
         say(`${short}. ${fmtDist(d)} 남음`, 'normal');
@@ -381,14 +415,20 @@
       let a = l.alight, fb = false, scale = 0;
       if (!hasXY(a)) {                 // 하차 정류장 좌표가 없으면 사무실(다음 도보 구간의 끝)까지 남은 거리로 대신 안내
         const nl = S.route.legs[S.li + 1], d = nl && nl.type === 'walk' ? nl.points[nl.points.length - 1] : null;
-        if (!hasXY(d)) return;
+        if (!hasXY(d)) {               // 좌표가 전혀 없으면 3분마다 안내(무음이면 앱이 멈춘 것과 구별할 수 없음)
+          const tn = now(); if (!S.busNoteAt) S.busNoteAt = tn;
+          if (tn - S.busNoteAt >= 180000) { S.busNoteAt = tn; say('버스 이동 중. 하차 위치 정보가 없으니 안내방송으로 정류장 이름을 확인하세요. 내린 뒤 다음 버튼을 누르세요.', 'queue'); }
+          return;
+        }
         const m = (nl.title || '').match(/([\d,]+)\s*미터/);
-        a = { name: '하차 정류장 부근', lat: d.lat, lng: d.lng }; fb = true; scale = 0.85 * (m ? +m[1].replace(/,/g, '') : 300);
+        a = { name: '하차 정류장 부근', lat: d.lat, lng: d.lng }; fb = true; scale = m ? +m[1].replace(/,/g, '') : 300; // 직선거리는 도보거리 이하이므로 도보거리 전체를 더해 정류장을 지나치기 전에 알림
       }
       if (!S.fix) return;
       const d = dist(S.fix, a);
+      if (S.busMin == null || d < S.busMin) S.busMin = d;
+      else if (d > S.busMin + 400 && !S.busFar) { S.busFar = true; io.vibrate(PAT.warn); say('하차 위치에서 멀어지고 있음. 다른 방향 버스일 수 있으니 안내방송으로 행선지를 확인하세요.', 'high'); }
       const stages = fb
-        ? [[500 + scale, '하차 정류장이 가까워지고 있음. 하차 준비'], [150 + scale, '곧 하차 정류장. 하차벨을 누르세요'], [40 + scale, '하차 정류장 부근임. 안내방송으로 정류장 이름을 확인하고 내리세요. 내린 뒤 다음 버튼을 누르세요']]
+        ? [[500 + scale, '하차 정류장이 가까워지고 있음. 하차 준비'], [150 + scale, '곧 하차 정류장일 수 있음. 하차벨을 누르세요'], [40 + scale, '하차 정류장 부근임. 안내방송으로 정류장 이름을 확인하고 내리세요. 내린 뒤 다음 버튼을 누르세요']]
         : [[500, '하차 정류장까지 약 500미터. 하차 준비'], [150, '곧 하차. 하차벨을 누르세요'], [40, '하차 정류장에 도착함. 내리세요']];
       for (let k = S.busStage; k < stages.length; k++) {
         if (d <= stages[k][0]) {
@@ -399,7 +439,14 @@
       }
     }
 
-    function onCompass(h) { S.compass = { val: ((h % 360) + 360) % 360, t: now() }; }
+    function checkSilence() {
+      const l = leg(); if (!l || (l.type !== 'walk' && l.type !== 'bus') || !S.lastFixAt) return;
+      if (!S.gpsLost && now() - S.lastFixAt >= 20000) {
+        S.gpsLost = true; io.vibrate(PAT.warn);
+        say('GPS 신호가 없음. 방금 안내한 위치를 기준으로 계속 가세요. 신호가 돌아오면 알려줌.', 'high');
+      }
+    }
+    function onCompass(h) { S.compass = { val: ((h % 360) + 360) % 360, t: now() }; checkSilence(); }
 
     // ---------- 사용자 조작 ----------
     function start(route, legIndex) { S.route = route; enterLeg(legIndex || 0); }
@@ -429,6 +476,14 @@
     function skipLeg() { if (leg()) enterLeg(S.li + 1, '구간을 건너뜀.'); }
     function prevLeg() { if (S.route) enterLeg(Math.max(0, Math.min(S.li, S.route.legs.length) - 1)); }
 
+    function snapshot() { return S.route && S.li >= 0 && S.li < S.route.legs.length ? { li: S.li, pi: S.pi, stIdx: S.stIdx } : null; }
+    function restore(route, snap) {
+      S.route = route; S.li = Math.max(0, Math.min(snap.li, route.legs.length - 1)); S.pi = snap.pi || 0; S.stIdx = snap.stIdx || 0;
+      S.minD = Infinity; S.lastGuidePos = null; S.lastGuideAt = 0; S.busStage = 0; S.inCnt = 0; S.warnedMissing = null;
+      const l = leg(); say(`이어서 안내함. ${l.title}.`, 'high');
+      if (io.onLegChange) io.onLegChange(S.li, l);
+    }
+
     function status() {
       const l = leg(), t = target(), r = t ? relTo(t) : null;
       return {
@@ -440,7 +495,7 @@
       };
     }
 
-    return { start, repeat, next, skipLeg, prevLeg, onFix, onCompass, status, _S: S };
+    return { start, repeat, next, skipLeg, prevLeg, onFix, onCompass, tick: checkSilence, snapshot, restore, status, _S: S };
   }
 
   return { createEngine, spoken, robustFuse, geoMedian, createKalman, median, medianPoint, spreadM, REC, dist, bearing, norm180, segDist, clock, cardinal, fmtDist, compassHeading, PAT, hasXY };

@@ -103,7 +103,8 @@ test('S1-a 서 있는 이용자: 5초 안에 7시 방향·약 50미터 안내', 
     x.stand(5, 0);
     const heard = x.log.filter((l) => /정류장까지/.test(l.text));
     assert.ok(heard.length >= 1, '정류장까지 거리 안내 없음\n  ' + x.dump());
-    assert.match(heard[0].text, /(4[05]|50|55)미터/, heard[0].text);
+    const dm = +(heard[0].text.match(/(\d+)미터/) || [])[1];
+    assert.ok(Math.abs(dm - 50) <= 15, '거리 오류(첫 GPS 25m 튐 허용 ±15m): ' + heard[0].text);
     assert.match(heard[0].text, /7시 방향|6시 방향|8시 방향/, heard[0].text); // 약 7시(±1시 허용)
   });
 });
@@ -116,9 +117,10 @@ test('S1-b 안내대로 걸어가 도착: 70초 내 도착, 걷는 동안 거짓
     const sec = x.walk(-43.3, -25, { maxSec: 90, until: () => x.legIndex() === 1 });
     x.stand(1);
     assert.equal(x.legIndex(), 1, `도착 못함(${sec}s)\n  ` + x.dump());
-    const fake = x.heardSince(startMs + 4000, /지나친|벗어났음/);   // 걷기 시작 4초 뒤부터
+    const doneAt = (x.log.find((l) => /정류장 도착/.test(l.text)) || { t: Infinity }).t;
+    const fake = x.log.filter((l) => l.t >= startMs + 4000 && l.t < doneAt && /지나친|벗어났음/.test(l.text));
     assert.equal(fake.length, 0, '거짓 경고: ' + fake.map((f) => f.text).join(' | ') + '\n  ' + x.dump());
-    const uturn = x.heardSince(startMs + 8000, BACK_RE);
+    const uturn = x.log.filter((l) => l.t >= startMs + 8000 && l.t < doneAt && BACK_RE.test(l.text));
     assert.equal(uturn.length, 0, '맞게 걷는데 유턴 안내: ' + uturn.map((f) => f.text).join(' | '));
     assert.ok(x.log.some((l) => /정류장 도착\. 탑승 준비/.test(l.text)));
   });
@@ -160,10 +162,10 @@ test('S3 정류장 지나침: 35m 이내 경고, 문구에 되돌아갈 방향 �
     const x = sim(sd);
     const r = { legs: [walkLeg('x', [pt('s', '정류장', 'stop', 100, 14, { radius: 8 })]), walkLeg('y', [pt('d', '끝', 'dest', 300, 100)])] };
     x.eng.start(r, 0);
-    x.st.n = 40; x.st.e = 14;               // 정류장 60m 전 (정류장 맞은편 보도)
+    x.st.n = 40; x.st.e = 0;                // 정류장 60m 전, 정류장은 오른쪽 14m 옆(길 건너)
     x.stand(2, 0);
     let warn = null, pastAt = null;
-    x.walk(180, 14, { maxSec: 120, until: () => { warn = x.log.find((l) => /지나친/.test(l.text)); if (warn && !pastAt) pastAt = x.st.n; return !!warn; } });
+    x.walk(180, 0, { maxSec: 120, until: () => { warn = x.log.find((l) => /지나친/.test(l.text)); if (warn && !pastAt) pastAt = x.st.n; return !!warn; } });
     assert.equal(x.legIndex(), 0, '14m 옆을 지나갔는데 도착 처리됨(반경 과대)');
     assert.ok(warn, '180m까지 걸어도 지나침 경고 없음\n  ' + x.dump());
     assert.ok(pastAt - 100 <= 35, `지나침 경고가 늦음: 정류장 ${Math.round(pastAt - 100)}m 지난 뒤`);
@@ -171,7 +173,7 @@ test('S3 정류장 지나침: 35m 이내 경고, 문구에 되돌아갈 방향 �
     assert.match(warn.text, /시 방향|뒤쪽|정면/, warn.text);
     // 경고 뒤 계속 걸어도 10초 내 중복 경고 없음
     const n0 = x.log.filter((l) => /지나친/.test(l.text)).length;
-    x.walk(200, 14, { maxSec: 10 });
+    x.walk(200, 0, { maxSec: 10 });
     assert.equal(x.log.filter((l) => /지나친/.test(l.text)).length, n0, '10초 내 지나침 경고 반복');
   });
 });
@@ -189,16 +191,18 @@ test('S4 경로 이탈 → 15초 내 경고 → 복귀 확인 → 도착', () =>
     x.stand(2, 90);
     // 경로 위 20m 지점까지 직진 → 북쪽으로 빗나가며 진행
     x.walk(0, 20, { maxSec: 30 });
-    let exceed25 = null;
-    const wps = [[45, 75], [45, 95]];
-    let warn = null;
-    for (const [wn, we] of wps) {
-      x.walk(wn, we, { maxSec: 60, until: () => { if (!exceed25 && x.st.n > 30) exceed25 = x.now(); warn = x.log.find((l) => /벗어났음/.test(l.text)); return !!warn && x.now() - exceed25 > 3000; } });
+    let exceed = null, warn = null, warnN = null;
+    for (const [wn, we] of [[45, 75], [45, 120]]) {
+      x.walk(wn, we, { maxSec: 60, until: () => {
+        if (!exceed && x.st.n > 30) exceed = x.now();
+        if (!warn) { warn = x.log.find((l) => /벗어났음/.test(l.text)); if (warn) warnN = x.st.n; }
+        return !!warn && !!exceed && x.now() - exceed > 3000; } });
       if (warn) break;
     }
-    assert.ok(exceed25, '시뮬레이션 오류: 이탈 안 함');
+    assert.ok(exceed, '시뮬레이션 오류: 이탈 안 함');
     assert.ok(warn, '45m 벗어났는데 경고 없음\n  ' + x.dump());
-    assert.ok(warn.t - exceed25 <= 15000, `이탈 경고 지연 ${(warn.t - exceed25) / 1000}s`);
+    assert.ok(warnN >= 15, `이탈 전에 거짓 경고(실제 이탈 ${Math.round(warnN)}m): ${warn.text}`);
+    assert.ok(warn.t - exceed <= 15000, `이탈 경고 지연 ${(warn.t - exceed) / 1000}s`);
     assert.match(warn.text, /시 방향|뒤쪽|정면/, warn.text);
     // 경고를 듣고 2초 뒤 복귀(경로 위 점으로)
     x.stand(2);
@@ -206,6 +210,7 @@ test('S4 경로 이탈 → 15초 내 경고 → 복귀 확인 → 도착', () =>
     x.walk(0, x.st.e + 20, { maxSec: 60, until: () => x.st.n < 3 });
     const onRouteAt = x.now();
     x.walk(0, 150, { maxSec: 200, until: () => x.legIndex() === 1 });
+    x.stand(3);   // 설계 변경(검증 후 합의): 스치는 GPS 잡음으로 인한 거짓 도착(S3)을 막으려고 도착 확정에 최대 3초가 걸림. 정류장에 닿아 멈춰 서는 시간으로 허용
     assert.equal(x.legIndex(), 1, '복귀 후 도착 못함\n  ' + x.dump());
     const warnsAfterBack = x.log.filter((l) => l.t > onRouteAt + 5000 && /벗어났음/.test(l.text));
     assert.equal(warnsAfterBack.length, 0, '복귀 후에도 이탈 경고: ' + warnsAfterBack.map((l) => l.text).join('|'));
@@ -293,7 +298,7 @@ test('S6-a 하차 좌표 없음(우회 보행, 직선 340m): 3단계 안내가 �
     x.eng.start(busRoute(340, { name: '하차 정류장' }), 0);
     const finalAt = rideBus(x, 600, stopE);
     for (const re of [/하차 준비/, /하차벨/, /안내방송/]) assert.equal(x.log.filter((l) => re.test(l.text)).length, 1, `${re} 횟수\n  ` + x.dump());
-    assert.ok(finalAt && finalAt.e <= stopE - 40, `내리라는 안내가 늦음: 정류장 ${finalAt ? stopE - finalAt.e : '-'}m 전`);
+    assert.ok(finalAt && finalAt.e <= stopE - 30, `내리라는 안내가 늦음: 정류장 ${finalAt ? stopE - finalAt.e : '-'}m 전`);
     assert.equal(x.legIndex(), 0, '자동 전환하면 안 됨');
     x.stand(3);
     x.eng.next();

@@ -38,38 +38,40 @@
 </head>
 <body>
 <main>
-  <h1>길동무 · 집→새 사무실 보행 안내</h1>
+  <h1>길동무</h1>
+  <p class="meta" role="note">보조 도구임. 흰지팡이, 안내견, 주변 소리 확인을 대체하지 않음. 횡단, 계단, 승강장에서는 직접 확인할 것.</p>
 
-  <div class="card warn" role="note">
-    <b>안전 안내:</b> 흰지팡이·안내견·주변 소리 확인을 대체하지 않는 보조 도구임. GPS는 건물 사이에서 5~20m 오차가 날 수 있음. 횡단·계단·승강장에서는 반드시 직접 확인할 것.
-  </div>
+  <div class="row"><label for="voiceOn">앱 음성 안내. 화면낭독기를 함께 쓰면 끄세요</label><input type="checkbox" id="voiceOn" checked style="width:44px;height:44px"></div>
 
   <label for="routeSel">경로 선택</label>
-  <select id="routeSel" aria-label="경로 선택"></select>
-
-  <div class="card now" id="now" tabindex="0" role="status" aria-live="off">안내 시작 버튼을 눌러주세요.</div>
+  <select id="routeSel"></select>
 
   <button class="primary" id="startBtn">안내 시작</button>
 
-  <p id="learnHelp" class="meta">평소처럼 걸으면 집·출구·정류장·하차 지점·사무실 위치와 걸은 방향·거리가 자동으로 저장됨. 별도 조작 불필요.</p>
-  <button class="primary" id="learnBtn" style="font-size:24px;min-height:84px;margin-top:10px">직접 걸으며 자동 기록</button>
-  <label for="learnFrom">기록 시작 구간</label>
-  <select id="learnFrom" aria-label="기록 시작 구간"></select>
+  <div class="card now" id="now" role="status" aria-live="off">안내 시작 버튼을 눌러 주세요.</div>
 
-  <div class="grid" style="margin-top:10px">
-    <button id="repeatBtn">다시 듣기</button>
-    <button id="nextBtn">다음</button>
-    <button id="prevBtn">이전 단계</button>
-    <button id="skipBtn">단계 건너뛰기</button>
-  </div>
-  <div class="grid" style="margin-top:10px">
-    <button id="shareBtn">내 위치 보내기, 도움 요청</button>
-    <button id="voiceCmdBtn">음성 명령</button>
+  <section role="group" aria-label="안내 조작">
+    <div class="grid">
+      <button id="repeatBtn">다시 듣기</button>
+      <button id="nextBtn">다음. 역이나 지점 확인</button>
+      <button id="prevBtn">이전 단계. 두 번 눌러야 함</button>
+      <button id="skipBtn">단계 건너뛰기. 두 번 눌러야 함</button>
+    </div>
+    <div class="grid" style="margin-top:10px">
+      <button id="shareBtn">내 위치 보내기. 도움 요청</button>
+      <button id="voiceCmdBtn">음성 명령</button>
+    </div>
+  </section>
+
+  <div class="card meta" id="meta" aria-live="off">
+    단계 <b id="mLeg">-</b>. 다음 지점 <b id="mPt">-</b><br>
+    거리 <b id="mDist">-</b>. 방향 <b id="mDir">-</b><br>
+    GPS 오차 <b id="mAcc">-</b>. 방향 센서 <b id="mSrc">-</b>
   </div>
 
   <section class="card" aria-labelledby="mapH">
     <h2 id="mapH">지도 앱에서 대중교통 보기</h2>
-    <p class="meta">실시간 버스 도착과 환승 정보는 지도 앱에서 확인함. 목적지는 사무실로 자동 입력됨.</p>
+    <p class="meta">실시간 버스 도착과 환승 정보는 지도 앱에서 확인함. 목적지는 사무실로 자동 입력됨. 지도 앱을 다녀와도 안내 진행 위치는 저장되어 이어서 안내함.</p>
     <div class="grid">
       <button id="openKakao">카카오맵 열기</button>
       <button id="openNaver">네이버지도 열기</button>
@@ -78,24 +80,22 @@
   </section>
 
   <section class="card" id="shareBox" hidden aria-labelledby="shareH">
-    <h2 id="shareH" tabindex="-1">공유로 받은 위치</h2>
+    <h2 id="shareH">공유로 받은 위치</h2>
     <p id="shareMsg" class="meta"></p>
     <label for="shareTarget">저장할 지점</label>
-    <select id="shareTarget" aria-label="저장할 지점"></select>
+    <select id="shareTarget"></select>
     <button id="shareSaveBtn" class="primary" style="font-size:22px;min-height:72px;margin-top:10px">이 지점으로 저장</button>
     <button id="shareCancelBtn" style="margin-top:10px">저장하지 않음</button>
   </section>
 
-  <div class="card meta" id="meta" aria-live="off">
-    단계 <b id="mLeg">-</b> · 다음 지점 <b id="mPt">-</b><br>
-    거리 <b id="mDist">-</b> · 방향 <b id="mDir">-</b><br>
-    GPS 오차 <b id="mAcc">-</b> · 방향 센서 <b id="mSrc">-</b>
-  </div>
-
   <details id="recDet">
-    <summary>현장 기록 모드 (동행인·활동지원사와 1회 실행)</summary>
-    <p class="meta">지점에 실제로 서서 [여기 저장]을 누르면 약 8초간 GPS를 평균 내어 좌표로 저장함. 출구 바로 앞·정류장 기둥 옆·사무실 입구에서 저장할 것. 걸어오며 횡단보도·꺾는 지점도 [지점 추가]로 넣을 수 있음.</p>
-    <button id="seedBtn" style="margin-bottom:10px">지도 데이터로 위치 다시 가져오기</button>
+    <summary>현장 기록과 지도 데이터</summary>
+    <p class="meta">지도 데이터는 앱을 열 때 자동으로 가져옴. 지점에 서서 저장하거나 걸으며 자동 기록하면 더 정확해짐. 지도 기준 위치는 오차가 있을 수 있음.</p>
+    <p id="learnHelp" class="meta">자동 기록: 평소처럼 걸으면 집, 출구, 정류장, 하차 지점, 사무실 위치와 걸은 방향과 거리가 저장됨.</p>
+    <button class="primary" id="learnBtn" style="font-size:22px;min-height:72px">직접 걸으며 자동 기록</button>
+    <label for="learnFrom">기록 시작 구간</label>
+    <select id="learnFrom"></select>
+    <button id="seedBtn" style="margin:10px 0">지도 데이터로 위치 다시 가져오기</button>
     <div id="seedMsg" class="meta" role="status"></div>
     <button id="learnSumBtn" style="margin-bottom:10px">기록된 방향과 거리 요약 듣기</button>
     <div id="learnSum" class="meta"></div>
@@ -106,28 +106,28 @@
       <button id="importBtn">경로 불러오기</button>
       <button id="resetBtn" class="danger">기록 초기화</button>
     </div>
-    <textarea id="io" rows="6" placeholder="내보내기/불러오기용 JSON" aria-label="경로 JSON"></textarea>
+    <textarea id="io" rows="6" placeholder="내보내기와 불러오기용 JSON" aria-label="경로 JSON"></textarea>
   </details>
 
   <details>
     <summary>설정</summary>
-    <div class="row"><label for="voiceOn">앱 음성 안내 (화면낭독기 사용 중이면 끄기)</label><input type="checkbox" id="voiceOn" checked style="width:32px;height:32px"></div>
-    <div class="row"><label for="rate">음성 속도 <b id="rateV">1.0</b></label><input type="range" id="rate" min="0.7" max="1.6" step="0.1" value="1.0"></div>
-    <div class="row"><label for="vibOn">진동 안내</label><input type="checkbox" id="vibOn" checked style="width:32px;height:32px"></div>
-    <div class="row"><label for="beepOn">목적지 근접 비프음</label><input type="checkbox" id="beepOn" checked style="width:32px;height:32px"></div>
-    <div class="row"><label for="beaconOn">소리 방향 안내(이어폰 권장). 목적지가 있는 쪽 귀에서 소리가 남</label><input type="checkbox" id="beaconOn" style="width:32px;height:32px"></div>
-    <div class="row"><label for="notiOn">알림 미러링(워치 진동·표시)</label><input type="checkbox" id="notiOn" style="width:32px;height:32px"></div>
-    <p class="meta">진동 규칙: 정방향 = 짧게 1회 · 왼쪽 = 짧게 3회 · 오른쪽 = 짧게 5회 · 유턴 = 길게 3회 · 도착 = 길게 1회 · 경고 = 짧게 3회(강)</p>
+    <div class="row"><label for="rate">음성 속도</label><input type="range" id="rate" min="0.7" max="1.6" step="0.1" value="1.0" aria-valuetext="속도 1.0배"></div>
+    <div class="row"><label for="vibOn">진동 안내</label><input type="checkbox" id="vibOn" checked style="width:44px;height:44px"></div>
+    <div class="row"><label for="beepOn">목적지 근접 비프음</label><input type="checkbox" id="beepOn" checked style="width:44px;height:44px"></div>
+    <div class="row"><label for="beaconOn">소리 방향 안내. 이어폰 권장. 목적지가 있는 쪽 귀에서 소리가 남</label><input type="checkbox" id="beaconOn" style="width:44px;height:44px"></div>
+    <div class="row"><label for="notiOn">알림 미러링. 워치에 진동과 표시</label><input type="checkbox" id="notiOn" style="width:44px;height:44px"></div>
+    <p class="meta">진동 규칙. 정방향은 1회, 왼쪽은 짧게 2회, 오른쪽은 짧게 3회, 유턴은 길게 3회, 도착은 길게 1회, 경고는 아주 짧게 여러 번.</p>
+    <button id="restartBtn" class="danger">처음부터 다시 안내</button>
   </details>
 
   <details>
     <summary>사용 방법</summary>
     <ol class="meta">
-      <li>출구에서 나오면 <b>멈춰서 5~10초</b> 대기. GPS가 잡히면 "정류장까지 N미터, 7시 방향"처럼 <b>내 몸 기준 시계 방향</b>으로 알려줌.</li>
-      <li>7시 = 왼쪽 뒤, 6시 = 뒤돌아서 유턴, 3시 = 오른쪽 직각, 12시 = 정면.</li>
-      <li>폰은 화면이 위로 가게 수평으로 들거나 가슴 앞에 세워 들기. 걷기 시작하면 걷는 방향(GPS)으로 자동 보정됨.</li>
-      <li>지하철 안은 GPS 불가 → [다음]을 역에 설 때마다 눌러 남은 역 수 확인.</li>
-      <li>버스 하차 후에는 하차 즉시 멈춰 서서 [다시 듣기].</li>
+      <li>출구에서 나오면 멈춰서 5초에서 10초 기다림. GPS가 잡히면 정류장까지 몇 미터, 몇 시 방향인지 내 몸 기준으로 알려줌.</li>
+      <li>12시는 정면, 3시는 오른쪽, 6시는 뒤돌아서 유턴, 9시는 왼쪽, 7시는 왼쪽 뒤임.</li>
+      <li>폰은 화면이 위로 가게 수평으로 들거나 가슴 앞에 세워 듦. 걷기 시작하면 걷는 방향으로 자동 보정됨.</li>
+      <li>지하철 안은 GPS가 안 됨. 역에 설 때마다 다음 버튼을 눌러 남은 역 수를 확인함.</li>
+      <li>버스에서 내린 뒤에는 멈춰 서서 다시 듣기를 누름.</li>
     </ol>
   </details>
 </main>

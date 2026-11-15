@@ -49,3 +49,9 @@ test('공유 이름 추출: 제목·본문 중복 제거, URL·좌표 제외', (
   const k = L.parseShared('금호역 1번 출구 https://maps.google.com/?q=37.548681,127.016205');
   assert.ok(k.ok); assert.equal(k.name, '금호역 1번 출구');
 });
+
+test('퍼센트가 들어간 일반 문장도 예외 없이 처리', () => {
+  const r = L.parseShared('50% 할인 구로디지털단지역 6번 출구 37.485013, 126.902762');
+  assert.ok(r.ok);
+  assert.doesNotThrow(() => L.parseShared('100% 확인 %E0%A4%A'));
+});

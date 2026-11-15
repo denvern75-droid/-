@@ -109,3 +109,16 @@ test('횡단보도에서 잠깐 선 것은 정류장으로 오인하지 않음(�
   s.sec(30, () => s.fix(cur, 7));                                 // 정류장에서 정지
   assert.ok(s.pts.stp, '충분히 걸은 뒤 정지하면 기록됨');
 });
+
+test('알려진 좌표와 너무 먼 곳의 정지·GPS 끊김은 기록하지 않음(오감지 방지)', () => {
+  // 집 근처 40m 걷다가 GPS가 끊겨도, 알려진 입구가 5km 떨어져 있으면 입구로 기록하지 않음
+  const r = route(); r.legs[0].points[0].lat = at(5000, 0).lat; r.legs[0].points[0].lng = at(5000, 0).lng;
+  let t = 5_000_000; const pts = {};
+  const L = WL.createLearner({ route: r, now: () => t, onPoint: (e) => { pts[e.id] = e; } });
+  const fx = (pos) => L.onFix({ ...pos, acc: 6, t });
+  L.start(0);
+  for (let i = 0; i < 10; i++) { t += 1000; fx(at(0, 0)); L.tick(); }
+  for (let i = 0; i < 40; i++) { t += 1000; fx(at(1.3 * i, 0)); L.tick(); }
+  for (let i = 0; i < 60; i++) { t += 1000; L.tick(); }               // GPS 끊김
+  assert.ok(pts.home, '집은 기록'); assert.equal(pts.ent, undefined, '5km 떨어진 알려진 입구와 달라 기록하지 않음');
+});

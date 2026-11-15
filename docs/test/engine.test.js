@@ -100,7 +100,7 @@ test('지하철: 역 카운트다운과 하차 안내', () => {
   eng.start(r, 0);
   eng.next(); assert.match(log[log.length - 1], /옥수역. 내릴 역까지 2개/);
   eng.next(); assert.match(log[log.length - 1], /다음 역이 하차역, 교대/);
-  eng.next(); assert.match(log[log.length - 1], /교대역 도착. 하차역임/);
+  eng.next(); assert.ok(log.some((s) => /교대역 도착. 하차역임/.test(s)), log.join('|'));
   assert.equal(eng.status().legIndex, 1);
 });
 
@@ -119,7 +119,7 @@ test('버스: 하차 정류장 접근 단계별 알림 후 자동으로 다음 �
 test('좌표 미기록 지점은 경고하고 오작동하지 않음', () => {
   const { eng, log, fix } = mk();
   eng.start({ legs: [{ type: 'walk', title: 'x', intro: '', points: [{ id: 'z', name: '미기록', kind: 'stop', lat: null, lng: null }] }] }, 0);
-  assert.match(log[0], /좌표가 기록되지 않은 지점이 1개/);
+  assert.ok(!/좌표가 기록되지 않은/.test(log[0]), '구간 소개에서는 좌표 누락을 낭독하지 않음(이용자에게 불필요)');
   fix(at(0, 0));
   assert.ok(log.some((s) => /좌표가 아직 없음/.test(s)));
 });
@@ -169,7 +169,7 @@ test('칼만 필터: 직선 보행에서 잡음 감소', () => {
 test('칼만 필터: 진행 방향·속도 추정, 큰 점프 후 재수렴', () => {
   const kf = W.createKalman();
   let out;
-  for (let i = 0; i < 25; i++) out = kf.update({ ...at(0, i * 1.4), acc: 5, heading: null, speed: 0, t: 2_000_000 + i * 1000 }); // 동쪽 1.4m/s
+  for (let i = 0; i < 25; i++) out = kf.update({ ...at(0, i * 1.4), acc: 5, heading: null, speed: null, t: 2_000_000 + i * 1000 }); // 동쪽 1.4m/s, 기기가 속도를 모름
   assert.ok(Math.abs(out.heading - 90) < 8, `heading ${out.heading}`);
   assert.ok(Math.abs(out.speed - 1.4) < 0.4, `speed ${out.speed}`);
   for (let i = 25; i < 40; i++) out = kf.update({ ...at(500, 500), acc: 5, heading: null, speed: 0, t: 2_000_000 + i * 1000 }); // 위치 점프
@@ -232,4 +232,33 @@ test('버스: 하차 정류장 좌표가 없어도 사무실까지 남은 거리
   assert.ok(log.some((s) => /하차벨/.test(s)));
   assert.ok(log.some((s) => /안내방송으로 정류장 이름을 확인/.test(s)));
   assert.equal(eng.status().legIndex, 0, '좌표 없이 자동으로 다음 구간으로 넘기지 않음');
+});
+
+test('융합 충돌: 도로 양쪽처럼 비슷한 정확도의 측정이 갈리면 평균(도로 한가운데)을 쓰지 않고 충돌로 표시', () => {
+  const near = [{ ...at(0, 0), acc: 5 }, { ...at(0, 1), acc: 5 }, { ...at(30, 0), acc: 5 }, { ...at(30, 1), acc: 5 }];  // 30m 간격 두 군집
+  const f = W.robustFuse(near);
+  assert.equal(f.conflict, true);
+  assert.ok(f.acc >= 15, `오차를 낮게 보고하면 안 됨: ${f.acc}`);
+  assert.ok(W.dist(f, at(15, 0.5)) > 10, '두 군집의 한가운데를 정류장으로 쓰면 안 됨');
+  // 정확도 차이가 큰 경우는 정확한 쪽을 따름(충돌 아님)
+  const g = W.robustFuse([{ ...at(0, 0), acc: 3 }, { ...at(40, 0), acc: 30 }]);
+  assert.equal(g.conflict, false); assert.ok(W.dist(g, at(0, 0)) < 1);
+});
+
+test('진행 위치 저장·복원: 지도 앱을 다녀와도 처음으로 돌아가지 않음', () => {
+  const log = [];
+  const io = { speak: (s) => log.push(s), vibrate() {}, beep() {}, notify() {} };
+  const route = { legs: [
+    { type: 'walk', title: '가', intro: '', points: [{ id: 'a', name: 'A', kind: 'stop', ...at(10, 0) }] },
+    { type: 'subway', title: '나', intro: '', stations: ['x', 'y', 'z'] },
+    { type: 'walk', title: '다', intro: '', points: [{ id: 'b', name: 'B', kind: 'dest', ...at(50, 0) }] }] };
+  const e1 = W.createEngine({ io, now: () => 1 });
+  e1.start(route, 0); e1.skipLeg(); e1.next();                         // 지하철 구간에서 한 역 이동
+  const snap = e1.snapshot();
+  assert.deepEqual(snap, { li: 1, pi: 0, stIdx: 1 });
+  const e2 = W.createEngine({ io, now: () => 1 });                       // 앱이 다시 열린 상황
+  e2.restore(route, snap);
+  assert.equal(e2.status().legIndex, 1); assert.equal(e2.status().stIdx, 1);
+  assert.match(log[log.length - 1], /이어서 안내함. 나/);
+  assert.equal(W.createEngine({ io }).snapshot(), null);
 });

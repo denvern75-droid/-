@@ -38,7 +38,8 @@
   const ll = (e) => ({ lat: e.lat, lng: e.lon != null ? e.lon : e.lng });
   const allClose = (els, m) => els.every((a) => els.every((b) => W.dist(ll(a), ll(b)) <= m));
 
-  function pickEntrance(elements, exitNo) {
+  function pickEntrance(elements, exitNo, station) {
+    if (station) elements = elements.filter((e) => { const m = e.tags && e.tags.name && String(e.tags.name).match(/([가-힣A-Za-z0-9]+역)/); return !m || norm(m[1]) === norm(station); }); // 다른 역 이름이 적힌 출입구는 제외
     const re = new RegExp('(^|[^0-9])' + exitNo.replace('-', '[-–]') + '\\s*번');
     const c = elements.filter((e) => e.tags && (e.tags.ref === exitNo || (e.tags.name && re.test(e.tags.name)) || (e.tags.ref && String(e.tags.ref).replace(/\D/g, '') === exitNo && exitNo.indexOf('-') < 0 && e.tags.ref === exitNo)));
     if (!c.length) return null;
@@ -47,14 +48,11 @@
   }
   function pickStop(elements, want) {
     if (want.ref) {
-      const byRef = elements.filter((e) => e.tags && [e.tags.ref, e.tags.local_ref, e.tags['ref:KR'], e.tags['ref:kr']].map(String).includes(want.ref));
-      if (byRef.length === 1) return Object.assign(ll(byRef[0]), { acc: 30, how: '정류장 번호 일치' });
-      if (byRef.length > 1 && allClose(byRef, 25)) return Object.assign(centroid(byRef), { acc: 30, how: '정류장 번호 일치(복수 평균)' });
+      const byRef = elements.filter((e) => e.tags && [e.tags.ref, e.tags.local_ref].map((v) => String(v == null ? '' : v)).includes(want.ref));
+      if (byRef.length === 1) return Object.assign(ll(byRef[0]), { acc: 40, how: '정류장 번호 일치' });
+      if (byRef.length > 1 && allClose(byRef, 25)) return Object.assign(centroid(byRef), { acc: 40, how: '정류장 번호 일치(복수 평균)' });
     }
-    const n = norm(want.name);
-    const byName = elements.filter((e) => e.tags && norm(e.tags.name) === n);
-    if (byName.length === 1) return Object.assign(ll(byName[0]), { acc: 40, how: '이름 일치' });
-    if (byName.length > 1 && allClose(byName, 25)) return Object.assign(centroid(byName), { acc: 40, how: '이름 일치(복수 평균)' });
+    // 이름만 일치하는 후보는 사용하지 않음: 도로 한쪽만 입력된 경우 반대편 위치가 '이름 일치'로 채워질 수 있음
     return null; // 도로 양쪽 정류장 구분 불가 → 채우지 않음
   }
 
@@ -88,8 +86,8 @@
       cache[x.station] = st ? { lat: +st.lat, lng: +st.lon } : false;
     }
     const c = cache[x.station]; if (!c) return null;
-    const els = await overpass(f, `[out:json][timeout:25];node["railway"="subway_entrance"](around:500,${c.lat},${c.lng});out body;`);
-    return pickEntrance(els, x.exit);
+    const els = await overpass(f, `[out:json][timeout:25];node["railway"="subway_entrance"](around:200,${c.lat},${c.lng});out body;`);
+    return pickEntrance(els, x.exit, x.station);
   }
   async function seedStop(f, name, near) {
     const s = parseStop(name); if (!s || !near) return null;
@@ -97,10 +95,13 @@
     return pickStop(els, s);
   }
   async function seedAddress(f, address, delay) {
+    const num = (String(address).match(/(\d+)(?:-\d+)?\s*$/) || [])[1];
+    const road = (String(address).match(/([가-힣]+\d*(?:대로|로|길)(?:\d+길)?)\s*\d+(?:-\d+)?\s*$/) || [])[1];
+    if (!num || !road) return null;                   // 번지와 도로명을 해석하지 못하면 채우지 않음
     await sleep(delay);
     const res = await nominatim(f, address);
-    const hit = res.find((r) => r.address && r.address.house_number && inSeoul(+r.lat, +r.lon));
-    return hit ? { lat: +hit.lat, lng: +hit.lon, acc: 30, how: '주소(번지) 일치' } : null;
+    const hit = res.find((r) => r.address && String(r.address.house_number) === num && norm(r.address.road).includes(norm(road)) && inSeoul(+r.lat, +r.lon));
+    return hit ? { lat: +hit.lat, lng: +hit.lon, acc: 40, how: '주소(번지·도로명 일치). 건물 중심이라 입구와 다를 수 있음' } : null;
   }
 
   /*

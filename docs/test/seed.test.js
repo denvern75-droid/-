@@ -31,7 +31,7 @@ test('정류장 선택: 번호 우선, 도로 양쪽 동명은 제외', () => {
   // 번호 정보가 없고 이름만 같은 두 정류장이 80m 떨어져 있으면(양방향) 채우지 않음
   const two = [node(37.4860, 126.9040, { name: '문성초등학교.금천가족문화센터' }), node(37.4866, 126.9046, { name: '문성초등학교.금천가족문화센터' })];
   assert.equal(S.pickStop(two, { name: '문성초등학교.금천가족문화센터', ref: null }), null);
-  assert.ok(S.pickStop([two[0]], { name: '문성초등학교 금천가족문화센터', ref: null })); // 표기 차이는 정규화
+  assert.equal(S.pickStop([two[0]], { name: '문성초등학교.금천가족문화센터', ref: null }), null); // 한쪽만 입력된 경우도 이름만으로는 채우지 않음(반대편일 수 있음)
 });
 
 test('전체 실행: 좌표 없는 지점만 채우고 애매한 것은 건너뜀', async () => {
@@ -66,4 +66,17 @@ test('주소가 도로까지만 나오면(번지 없음) 채우지 않음, 조�
   assert.equal(rep.seeds.length, 0);
   assert.equal(rep.skipped.length, 2);
   assert.match(rep.skipped[1].reason, /조회 실패/);
+});
+
+test('이웃 역 출구와 이웃 번지는 채택하지 않음', async () => {
+  const neighbor = [node(37.4850, 126.9027, { ref: '6', name: '대림역 6번 출구' })];
+  assert.equal(S.pickEntrance(neighbor, '6', '구로디지털단지역'), null);
+  assert.ok(S.pickEntrance([node(37.4850, 126.9027, { ref: '6', name: '구로디지털단지역 6번 출구' })], '6', '구로디지털단지역'));
+  assert.ok(S.pickEntrance([node(37.4850, 126.9027, { ref: '6' })], '6', '구로디지털단지역'));   // 이름이 없으면 위치 기준(반경 200m)으로 판단
+  const route = { legs: [{ type: 'walk', title: 'b', points: [{ id: 'ds', name: '사무실', kind: 'dest' }] }] };
+  const f = async () => json([{ lat: '37.46', lon: '126.90', address: { house_number: '35', road: '독산로85길' } }]);   // 이웃 번지
+  assert.equal((await S.run({ fetch: f, route, destination: '서울 금천구 독산로85길 37', delayMs: 0 })).seeds.length, 0);
+  const g = async () => json([{ lat: '37.46', lon: '126.90', address: { house_number: '37', road: '독산로85길' } }]);
+  const ok = await S.run({ fetch: g, route, destination: '서울 금천구 독산로85길 37', delayMs: 0 });
+  assert.equal(ok.seeds.length, 1); assert.equal(ok.seeds[0].acc, 40);
 });

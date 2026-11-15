@@ -47,7 +47,9 @@
   // ---------- 공유 텍스트 해석 ----------
   const SHORT = /(kko\.to|naver\.me|maps\.app\.goo\.gl|goo\.gl\/maps|g\.co\/kgs|map\.naver\.com\/p\/entry\/place\/\d+$)/i;
   function parseShared(raw) {
-    const text = decodeURIComponent(String(raw || '').replace(/\+/g, ' ')).replace(/%2C/gi, ',');
+    let text = String(raw || '').replace(/\+/g, ' ');
+    try { text = decodeURIComponent(text); } catch (e) { /* 퍼센트가 포함된 일반 문장(예: 50% 할인)은 원문 그대로 해석 */ }
+    text = text.replace(/%2C/gi, ',');
     const out = { ok: false, reason: '', name: '', lat: null, lng: null, source: '', raw: text };
     const take = (lat, lng, src) => {
       lat = +lat; lng = +lng;
