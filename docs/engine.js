@@ -218,7 +218,7 @@
       route: null, li: -1, pi: 0, fix: null, compass: null, track: [],
       stIdx: 0, last: '', minD: Infinity,
       lastGuideAt: 0, lastGuidePos: null, lastCls: null, lastCueAt: 0,
-      lastOffAt: 0, lastOverAt: 0, lastBeepAt: 0, warnedMissing: null, busStage: 0,
+      lastOffAt: 0, lastOverAt: 0, lastBeepAt: 0, lastBeacon: 0, pre: {}, warnedMissing: null, busStage: 0,
     };
 
     const leg = () => (S.route ? S.route.legs[S.li] : null);
@@ -317,6 +317,18 @@
       const radius = Math.max(t.radius || C.defaultRadius, Math.min(fix.acc || 0, C.accCap));
       if (d <= radius) return arrive(t);
 
+      // 오디오 비콘(좌우 스테레오): 목적지가 있는 쪽 귀에서 소리가 남. 이어폰 사용 시 효과적
+      if (io.beacon && tNow - S.lastBeacon >= 1200) {
+        const rb = relTo(t);
+        if (rb && rb.ck) { S.lastBeacon = tNow; io.beacon(rb.ck.rel, d); }
+      }
+      // 꺾는 곳 사전 예고: 30m 전, 10m 전 (갈림길·굽은 길을 미리 알려 주는 방식)
+      if (t.turn) {
+        const dir = t.turn === 'left' ? '왼쪽' : '오른쪽';
+        const k30 = `${S.li}-${S.pi}-30`, k10 = `${S.li}-${S.pi}-10`;
+        if (d <= 12 && !S.pre[k10]) { S.pre[k10] = S.pre[k30] = true; io.vibrate(t.turn === 'left' ? PAT.left : PAT.right); say(`곧 ${dir}으로 꺾기.`, 'high'); }
+        else if (d <= 30 && !S.pre[k30]) { S.pre[k30] = true; say(`약 ${fmtDist(d)} 앞에서 ${dir}으로 꺾기.`, 'high'); }
+      }
       const endKind = ['stop', 'dest', 'entrance', 'exit'].includes(t.kind);
       if (d < S.minD) S.minD = d;
       else if (endKind && S.minD < 45 && d > S.minD + C.overshootM && tNow - S.lastOverAt > 15000) {

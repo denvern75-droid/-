@@ -5,7 +5,7 @@
   const $ = (id) => document.getElementById(id);
   const LS_ROUTE = 'walknav.route.v1', LS_SET = 'walknav.settings.v1';
 
-  const set = Object.assign({ voice: true, rate: 1.0, vib: true, beep: true, noti: false },
+  const set = Object.assign({ voice: true, rate: 1.0, vib: true, beep: true, beacon: false, noti: false },
     JSON.parse(localStorage.getItem(LS_SET) || '{}'));
   const saveSet = () => localStorage.setItem(LS_SET, JSON.stringify(set));
 
@@ -38,6 +38,22 @@
         const o = actx.createOscillator(), g = actx.createGain();
         o.frequency.value = freq; g.gain.value = 0.2;
         o.connect(g); g.connect(actx.destination); o.start(); o.stop(actx.currentTime + 0.12);
+      } catch (e) { /* 무시 */ }
+    },
+    // 좌우 스테레오 비콘: 오른쪽이면 오른쪽 귀, 정면이면 높은 음, 뒤쪽이면 낮은 음 두 번
+    beacon(rel) {
+      if (!set.beacon) return;
+      try {
+        actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+        const a = Math.abs(rel), pan = Math.sin((rel * Math.PI) / 180);
+        const freq = a <= 20 ? 880 : a >= 150 ? 330 : 587;
+        const beep = (delay) => {
+          const o = actx.createOscillator(), g = actx.createGain();
+          o.frequency.value = freq; g.gain.value = 0.25; o.connect(g);
+          if (actx.createStereoPanner) { const p = actx.createStereoPanner(); p.pan.value = pan; g.connect(p); p.connect(actx.destination); } else g.connect(actx.destination);
+          const t0 = actx.currentTime + delay; o.start(t0); o.stop(t0 + 0.09);
+        };
+        beep(0); if (a >= 150) beep(0.18);
       } catch (e) { /* 무시 */ }
     },
     notify(text) {
@@ -171,6 +187,7 @@
     l.points = l.points.filter((p) => !p.auto);            // 이전 자동 꺾는 지점 교체
     const last = l.points.pop();
     e.turns.forEach((t, i) => l.points.push({ id: `auto-${e.legIndex}-${i}`, auto: true, name: '꺾는 곳', kind: 'turn', radius: 8, lat: t.lat, lng: t.lng,
+      turn: t.turn, angle: t.angle,
       say: `${t.turn === 'left' ? '왼쪽' : '오른쪽'}으로 약 ${t.angle}도 꺾기. 이후 ${W.fmtDist(t.nextLen)} 직진.` }));
     l.points.push(last);
     l.learned = { text: e.text, distance: Math.round(e.distance), at: Date.now() };
@@ -302,13 +319,14 @@
 
   // 설정
   $('voiceOn').checked = set.voice; $('rate').value = set.rate; $('rateV').textContent = set.rate;
-  $('vibOn').checked = set.vib; $('beepOn').checked = set.beep; $('notiOn').checked = set.noti;
+  $('vibOn').checked = set.vib; $('beepOn').checked = set.beep; $('beaconOn').checked = set.beacon; $('notiOn').checked = set.noti;
   const syncLive = () => $('now').setAttribute('aria-live', set.voice ? 'off' : 'polite'); // 앱 음성이 꺼지면 화면낭독기가 대신 읽음
   $('voiceOn').onchange = (e) => { set.voice = e.target.checked; saveSet(); syncLive(); };
   syncLive();
   $('rate').oninput = (e) => { set.rate = +e.target.value; $('rateV').textContent = set.rate; saveSet(); };
   $('vibOn').onchange = (e) => { set.vib = e.target.checked; saveSet(); };
   $('beepOn').onchange = (e) => { set.beep = e.target.checked; saveSet(); };
+  $('beaconOn').onchange = (e) => { set.beacon = e.target.checked; saveSet(); };
   $('notiOn').onchange = async (e) => {
     set.noti = e.target.checked; saveSet();
     if (set.noti && 'Notification' in window) await Notification.requestPermission();

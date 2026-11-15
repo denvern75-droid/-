@@ -183,3 +183,26 @@ test('낭독용 변환: 오독되는 표기를 소리 나는 대로', () => {
   assert.equal(W.spoken('금호역 입구(출구 번호 미정).'), '금호역 입구, 출구 번호 미정.');
   assert.equal(W.spoken('5623번 버스 도착'), '5623번 버스 도착'); // 4자리 버스 번호는 그대로
 });
+
+test('꺾는 곳 사전 예고: 30m 전, 12m 이내 각 1회', () => {
+  const log = [], t0 = { v: 9_000_000 };
+  const io = { speak: (s) => log.push(s), vibrate() {}, beep() {}, notify() {} };
+  const eng = W.createEngine({ io, now: () => t0.v });
+  eng.start({ legs: [{ type: 'walk', title: 'x', intro: '', points: [
+    { id: 'turn', name: '꺾는 곳', kind: 'turn', turn: 'right', radius: 6, ...at(100, 0) },
+    { id: 'end', name: '끝', kind: 'dest', radius: 6, ...at(100, 100) }] }] }, 0);
+  for (const n of [40, 80, 72, 90, 95, 92]) { t0.v += 5000; eng.onFix({ ...at(n, 0), acc: 5, heading: 0, speed: 1.3, t: t0.v }); }
+  const pre = log.filter((s) => /꺾기\.$/.test(s));
+  assert.equal(pre.filter((s) => /앞에서 오른쪽으로 꺾기/.test(s)).length, 1, pre.join('|'));
+  assert.equal(pre.filter((s) => /^곧 오른쪽으로 꺾기/.test(s)).length, 1, pre.join('|'));
+});
+
+test('오디오 비콘: 목적지 방향(상대각)을 1.2초 이상 간격으로 전달', () => {
+  const calls = [], t0 = { v: 9_500_000 };
+  const io = { speak() {}, vibrate() {}, beep() {}, notify() {}, beacon: (rel) => calls.push(Math.round(rel)) };
+  const eng = W.createEngine({ io, now: () => t0.v });
+  eng.start({ legs: [{ type: 'walk', title: 'x', intro: '', points: [{ id: 'd', name: '끝', kind: 'dest', radius: 6, ...at(0, 100) }] }] }, 0);
+  for (let i = 0; i < 4; i++) { t0.v += 2000; eng.onFix({ ...at(0, 0), acc: 5, heading: 0, speed: 1.3, t: t0.v }); } // 북쪽을 향함, 목적지는 동쪽
+  assert.equal(calls.length, 4);
+  assert.ok(calls.every((r) => r === 90), calls.join(','));  // 오른쪽 직각
+});
