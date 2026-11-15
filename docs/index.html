@@ -95,6 +95,8 @@
   <details id="recDet">
     <summary>현장 기록 모드 (동행인·활동지원사와 1회 실행)</summary>
     <p class="meta">지점에 실제로 서서 [여기 저장]을 누르면 약 8초간 GPS를 평균 내어 좌표로 저장함. 출구 바로 앞·정류장 기둥 옆·사무실 입구에서 저장할 것. 걸어오며 횡단보도·꺾는 지점도 [지점 추가]로 넣을 수 있음.</p>
+    <button id="seedBtn" style="margin-bottom:10px">지도 데이터로 위치 다시 가져오기</button>
+    <div id="seedMsg" class="meta" role="status"></div>
     <button id="learnSumBtn" style="margin-bottom:10px">기록된 방향과 거리 요약 듣기</button>
     <div id="learnSum" class="meta"></div>
     <div id="ptList"></div>
@@ -133,6 +135,7 @@
 <script src="engine.js"></script>
 <script src="learn.js"></script>
 <script src="links.js"></script>
+<script src="seed.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

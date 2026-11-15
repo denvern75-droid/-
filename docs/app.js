@@ -67,6 +67,7 @@
   const kf = W.createKalman();
   const WL = window.WalkLearn;
   const LK = window.WalkLinks;
+  const SD = window.WalkSeed;
   let learner = null;
 
   // ---------- 센서 ----------
@@ -172,6 +173,7 @@
     return null;
   }
   // 기존 좌표(출처 불명)는 지우지 않고 낮은 비중(오차 25m)의 기준값으로 남겨 새 측정과 융합
+  const markWeak = (tgt) => { tgt.weak = !(tgt.samples || []).some((s) => !s.src || s.src === 'walk'); };
   function seedExisting(tgt) {
     if (W.hasXY(tgt) && !(tgt.samples && tgt.samples.length)) tgt.samples = [{ lat: tgt.lat, lng: tgt.lng, acc: 25, t: 0, src: 'seed' }];
   }
@@ -183,9 +185,9 @@
     if (!tgt) return;
     seedExisting(tgt);
     tgt.samples = tgt.samples || [];
-    tgt.samples.push({ lat: e.lat, lng: e.lng, acc: e.acc, t: Date.now() });
+    tgt.samples.push({ lat: e.lat, lng: e.lng, acc: e.acc, t: Date.now(), src: 'walk' });
     const m = W.robustFuse(tgt.samples);
-    tgt.lat = m.lat; tgt.lng = m.lng; tgt.recAcc = Math.round(m.acc);
+    tgt.lat = m.lat; tgt.lng = m.lng; tgt.recAcc = Math.round(m.acc); markWeak(tgt);
     persist(); refreshRec();
   }
   function applyLearnedLeg(e) {
@@ -221,6 +223,38 @@
     io.speak(parts.length ? parts.join(' ') : '아직 걸어서 기록된 구간이 없음.', 'high');
   };
   setInterval(() => { if (learner) learner.tick(); }, 1000);
+
+  // ---------- 지도 데이터 자동 연결(처음 가는 길 대비) ----------
+  function findById(rt, id) { for (const l of rt.legs) { const p = (l.points || []).find((q) => q.id === id); if (p) return p; } return null; }
+  async function autoSeed(force) {
+    if (!SD || !navigator.onLine || !route || !data) return;
+    const need = route.legs.some((l) => (l.points || []).some((p) => !W.hasXY(p)));
+    const last = +localStorage.getItem('walknav.seed.t') || 0;
+    if (!force && (!need || Date.now() - last < 6 * 3600 * 1000)) return;
+    localStorage.setItem('walknav.seed.t', String(Date.now()));
+    $('seedMsg').textContent = '지도 데이터를 가져오는 중임.';
+    if (force) io.speak('지도 데이터로 출구와 정류장 위치를 가져오는 중임.', 'normal');
+    let rep;
+    try { rep = await SD.run({ fetch: window.fetch.bind(window), route, destination: data.destination }); }
+    catch (e) { $('seedMsg').textContent = '지도 데이터를 가져오지 못했음: ' + e.message; return; }
+    const notes = [];
+    rep.seeds.forEach((s) => {
+      const tgt = findById(route, s.id); if (!tgt) return;
+      const walked = (tgt.samples || []).some((q) => !q.src || q.src === 'walk');
+      if (walked) return;                                    // 걸어서 확인된 지점은 지도 데이터로 바꾸지 않음
+      const before = W.hasXY(tgt) ? { lat: tgt.lat, lng: tgt.lng } : null;
+      seedExisting(tgt); tgt.samples = tgt.samples || [];
+      tgt.samples.push({ lat: s.lat, lng: s.lng, acc: s.acc, t: Date.now(), src: 'osm' });
+      const m = W.robustFuse(tgt.samples);
+      tgt.lat = m.lat; tgt.lng = m.lng; tgt.recAcc = Math.round(m.acc); markWeak(tgt);
+      if (before && W.dist(before, s) > 50) notes.push(`${tgt.name}: 기존 좌표와 지도 데이터가 ${Math.round(W.dist(before, s))}미터 다름`);
+    });
+    persist(); refreshRec();
+    const msg = `지도 데이터로 ${rep.seeds.length}개 지점의 위치를 채웠고 ${rep.skipped.length}개는 애매하거나 없어 건너뜀.` + (notes.length ? ' 주의: ' + notes.join('. ') + '.' : '') + ' 지도 데이터 기준이라 오차가 있을 수 있음.';
+    $('seedMsg').textContent = msg + (rep.skipped.length ? ' 건너뜀: ' + rep.skipped.map((q) => q.name).join(', ') : '');
+    if (rep.seeds.length || force) io.speak(msg, 'normal');
+  }
+  $('seedBtn').onclick = () => autoSeed(true);
 
   // ---------- 외부 지도 앱 연계 ----------
   function officeDest() {
@@ -275,7 +309,7 @@
     tgt.samples = tgt.samples || [];
     tgt.samples.push({ lat: shared.lat, lng: shared.lng, acc: 25, t: Date.now(), src: shared.source }); // 장소 중심 좌표는 오차 25m로 가중치를 낮춤
     const m = W.robustFuse(tgt.samples);
-    tgt.lat = m.lat; tgt.lng = m.lng; tgt.recAcc = Math.round(m.acc);
+    tgt.lat = m.lat; tgt.lng = m.lng; tgt.recAcc = Math.round(m.acc); markWeak(tgt);
     persist(); refreshRec(); $('shareBox').hidden = true;
     io.speak(`${q.label} 위치를 저장했음. 걸어서 기록하면 더 정확해짐.`, 'high'); shared = null;
   };
@@ -309,7 +343,7 @@
       p.samples.push(avg);
       // 2) 여러 번 기록: 기록 간 오차는 독립에 가까우므로 융합하면 오차가 줄어듦
       const m = W.robustFuse(p.samples);
-      p.lat = m.lat; p.lng = m.lng; p.recAcc = Math.round(m.acc);
+      p.lat = m.lat; p.lng = m.lng; p.recAcc = Math.round(m.acc); p.weak = false;
       persist(); refreshRec();
       let msg = `${p.name || '지점'} 위치를 저장했음. ${p.samples.length}회 기록, 추정 오차 약 ${Math.round(m.acc)}미터.`;
       if (m.rejected) msg += ` 튀는 기록 ${m.rejected}건은 제외했음.`;
@@ -405,7 +439,7 @@
     if (set.noti && 'Notification' in window) await Notification.requestPermission();
   };
 
-  loadData().catch((e) => { $('now').textContent = '경로를 불러오지 못했음: ' + e.message; });
+  loadData().then(() => autoSeed(false)).catch((e) => { $('now').textContent = '경로를 불러오지 못했음: ' + e.message; });
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
   setInterval(() => { if (started) render(); }, 1000);
   window.__walknav = { engine, get route() { return route; }, feed: (f) => { lastFix = f; if (learner) learner.onFix(f); engine.onFix(f); render(); } };

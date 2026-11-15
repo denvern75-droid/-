@@ -206,3 +206,30 @@ test('오디오 비콘: 목적지 방향(상대각)을 1.2초 이상 간격으�
   assert.equal(calls.length, 4);
   assert.ok(calls.every((r) => r === 90), calls.join(','));  // 오른쪽 직각
 });
+
+test('지도 데이터 기준 지점은 안내 시작 때 오차 주의를 알림', () => {
+  const log = [];
+  const io = { speak: (s) => log.push(s), vibrate() {}, beep() {}, notify() {} };
+  const eng = W.createEngine({ io, now: () => 1 });
+  eng.start({ legs: [{ type: 'walk', title: 'x', intro: '', points: [
+    { id: 'a', name: '지도기준', kind: 'stop', ...at(10, 10), weak: true, samples: [{ ...at(10, 10), acc: 30, src: 'osm' }] },
+    { id: 'b', name: '걸어서확인', kind: 'dest', ...at(20, 20), weak: false, samples: [{ ...at(20, 20), acc: 6, src: 'walk' }] }] }] }, 0);
+  assert.match(log[0], /지도 데이터 기준이라 오차가 있을 수 있음/);
+  log.length = 0;
+  eng.start({ legs: [{ type: 'walk', title: 'x', intro: '', points: [{ id: 'b', name: '걸어서확인', kind: 'dest', ...at(20, 20), weak: false, samples: [{ ...at(20, 20), acc: 6, src: 'walk' }] }] }] }, 0);
+  assert.ok(!/지도 데이터 기준/.test(log[0]));
+});
+
+test('버스: 하차 정류장 좌표가 없어도 사무실까지 남은 거리로 하차 준비 안내(자동 전환은 하지 않음)', () => {
+  const log = [], t0 = { v: 7_000_000 };
+  const io = { speak: (s) => log.push(s), vibrate() {}, beep() {}, notify() {} };
+  const eng = W.createEngine({ io, now: () => t0.v });
+  eng.start({ legs: [
+    { type: 'bus', title: '버스', intro: '', alight: { name: '하차 정류장' } },
+    { type: 'walk', title: '도보 400미터', intro: '', points: [{ id: 'd', name: '사무실', kind: 'dest', ...at(0, 0) }] }] }, 0);
+  for (const e of [1400, 900, 600, 400, 350]) { t0.v += 3000; eng.onFix({ ...at(0, e), acc: 8, heading: 270, speed: 8, t: t0.v }); } // 사무실까지 동쪽 거리
+  assert.ok(log.some((s) => /하차 준비/.test(s)), log.join('|'));
+  assert.ok(log.some((s) => /하차벨/.test(s)));
+  assert.ok(log.some((s) => /안내방송으로 정류장 이름을 확인/.test(s)));
+  assert.equal(eng.status().legIndex, 0, '좌표 없이 자동으로 다음 구간으로 넘기지 않음');
+});

@@ -264,7 +264,8 @@
       const head = `${i + 1}단계. ${l.title}.`;
       if (l.type === 'walk') {
         const miss = l.points.filter((p) => !hasXY(p)).length;
-        return `${head} ${l.intro || ''}` + (l.learned && l.learned.text ? ` 걸었던 기록: ${l.learned.text}.` : '') + (miss ? ` 주의, 좌표가 기록되지 않은 지점이 ${miss}개 있음.` : '');
+        const weak = l.points.filter((p) => hasXY(p) && (p.weak === true || !(p.samples && p.samples.length))).length; // 걸어서 확인되지 않은 지점
+        return `${head} ${l.intro || ''}` + (l.learned && l.learned.text ? ` 걸었던 기록: ${l.learned.text}.` : '') + (miss ? ` 주의, 좌표가 기록되지 않은 지점이 ${miss}개 있음.` : '') + (weak ? ' 주의, 위치가 지도 데이터 기준이라 오차가 있을 수 있음. 주변 소리와 표지판을 함께 확인하세요.' : '');
       }
       if (l.type === 'subway') {
         const n = l.stations ? l.stations.length - 1 : null;
@@ -377,13 +378,22 @@
     }
 
     function busTick(l) {
-      const a = l.alight; if (!hasXY(a) || !S.fix) return;
+      let a = l.alight, fb = false, scale = 0;
+      if (!hasXY(a)) {                 // 하차 정류장 좌표가 없으면 사무실(다음 도보 구간의 끝)까지 남은 거리로 대신 안내
+        const nl = S.route.legs[S.li + 1], d = nl && nl.type === 'walk' ? nl.points[nl.points.length - 1] : null;
+        if (!hasXY(d)) return;
+        const m = (nl.title || '').match(/([\d,]+)\s*미터/);
+        a = { name: '하차 정류장 부근', lat: d.lat, lng: d.lng }; fb = true; scale = 0.85 * (m ? +m[1].replace(/,/g, '') : 300);
+      }
+      if (!S.fix) return;
       const d = dist(S.fix, a);
-      const stages = [[500, '하차 정류장까지 약 500미터. 하차 준비'], [150, '곧 하차. 하차벨을 누르세요'], [40, '하차 정류장에 도착함. 내리세요']];
+      const stages = fb
+        ? [[500 + scale, '하차 정류장이 가까워지고 있음. 하차 준비'], [150 + scale, '곧 하차 정류장. 하차벨을 누르세요'], [40 + scale, '하차 정류장 부근임. 안내방송으로 정류장 이름을 확인하고 내리세요. 내린 뒤 다음 버튼을 누르세요']]
+        : [[500, '하차 정류장까지 약 500미터. 하차 준비'], [150, '곧 하차. 하차벨을 누르세요'], [40, '하차 정류장에 도착함. 내리세요']];
       for (let k = S.busStage; k < stages.length; k++) {
         if (d <= stages[k][0]) {
           S.busStage = k + 1; io.vibrate(k === 2 ? PAT.arrive : PAT.warn);
-          if (k === 2) return enterLeg(S.li + 1, `${a.name}. ${stages[k][1]}.`);
+          if (k === 2 && !fb) return enterLeg(S.li + 1, `${a.name}. ${stages[k][1]}.`);
           say(`${a.name}. ${stages[k][1]}`, 'high'); break;
         }
       }
