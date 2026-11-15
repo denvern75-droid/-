@@ -241,6 +241,7 @@
       lastOffAt: 0, lastOverAt: 0, lastBeepAt: 0, lastBeacon: 0, pre: {}, inCnt: 0, inHist: [], closeCnt: 0, nearAt: 0, nearSaid: false, awayCnt: 0, farAt: 0, noShape: false, pendCls: null, clsStreak: 0, lastFixAt: 0, gpsLost: false, fixInLeg: false, busNoteAt: 0, offRoute: false, farWarned: false, busMin: null, busFar: false, warnedMissing: null, busStage: 0,
     };
 
+    S.wHist = []; S.inHistW = (inside) => { S.wHist.push(inside); if (S.wHist.length > 2) S.wHist.shift(); return S.wHist.length === 2 && S.wHist[0] && S.wHist[1]; };   // 연속 2회 확인
     const isWeak = (p) => !!p && (p.weak === true || p.recAcc > 20);   // 걸어서 확인되지 않은 지도 기준 좌표
     const leg = () => (S.route ? S.route.legs[S.li] : null);
     const target = () => { const l = leg(); return l && l.type === 'walk' ? l.points[S.pi] : null; };
@@ -385,6 +386,12 @@
       const prevD = S.prevD; S.prevD = d;
       const h = S.inHist, n = h.length;
       const two = n >= 2 && h[n - 1] && h[n - 2], three = n >= 3 && two && h[n - 3];
+      if (weak && (t.kind === 'turn' || t.kind === 'crossing') && S.pi < l.points.length - 1 && d <= 15 && S.inHistW(d <= 15)) {
+        // 확인되지 않은 꺾는 곳: 근처(15m)에 오면 '이 근처'라고 알리고 다음 지점 안내로 넘어감(도착이라고 하지 않음, 멈춰서 기다리게 하지 않음)
+        io.vibrate(t.turn === 'left' ? PAT.left : t.turn === 'right' ? PAT.right : PAT.ahead);
+        S.pi++; S.minD = Infinity; S.lastGuidePos = null; S.inHist = []; S.prevD = null; S.nearSaid = false; S.atSaid = false; S.nearRep = 0; S.wHist = [];
+        say(t.say || `${nm(t)} 근처임.`, 'high'); return;
+      }
       if (weak) {   // 확인되지 않은 좌표에서는 도착을 선언하지 않음: 저장된 위치에 왔음을 알리고 이용자가 찾은 뒤 다음 버튼으로 진행
         if (two && !S.atSaid) { S.atSaid = true; S.nearSaid = true; S.nearAt = tNow; io.vibrate(PAT.ahead); say(`저장된 위치에 왔음. 찾는 곳은 이 주변 수십 미터 안에 있을 수 있음. 주변 사람에게 물어보고, 찾았으면 다음 버튼을 누르세요.`, 'high'); }
       } else
@@ -392,7 +399,7 @@
       if (three || (two && fix.speed < 0.5) || (d <= rIn * 0.5 && prevD != null && prevD <= rIn * 0.75)) return arrive(t);   // 한 번의 측정만으로는 확정하지 않음
       // 약한 좌표: 30m 안에 들어오면 '부근'임을 한 번 알리고 안내는 계속함(일찍 도착 처리해 이용자를 혼자 두지 않음)
       if (weak && S.nearSaid && d <= 45 && tNow - S.nearAt >= 45000) { S.nearAt = tNow; S.nearRep = (S.nearRep || 0) + 1; if (S.nearRep === 1) say('찾았으면 다음 버튼을 누르세요.', 'queue'); else io.vibrate(PAT.ahead); }   // 재알림은 한 번만, 이후에는 진동만
-      if (weak && d <= 30 && !S.nearSaid) {
+      if (weak && d <= 30 && !S.nearSaid && t.kind !== 'turn' && t.kind !== 'crossing') {
         S.nearSaid = true; S.nearAt = tNow; io.vibrate(PAT.ahead);
         say(`${nm(t)} 부근임. 30미터 안에 있을 수 있음. 주변 사람에게 확인하고, 찾았으면 다음 버튼을 누르세요.`, 'high');
       }

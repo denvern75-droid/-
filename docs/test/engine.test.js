@@ -426,3 +426,22 @@ test('접근성 재검증 2차 회귀: 구간 진입 때는 짧게 말하고, �
   assert.equal(W.spoken('탑승 버스는 51, 5602, 5627.'), '탑승 버스는 51, 5 6 0 2, 5 6 2 7.');
   assert.equal(W.spoken('거리 1.5킬로미터, 273미터.'), '거리 1.5킬로미터, 273미터.');
 });
+
+test('출근 하차 후 구간: 좌회전 지점 근처에서 랜드마크를 알리고 사무실 안내로 넘어감(도착 선언 없음)', () => {
+  const log = []; let t = 11_000_000;
+  const io = { speak: (s) => { log.push(s); }, vibrate() {}, beep() {}, notify() {} };
+  const route = require('../route.json').routes[0];
+  const li = route.legs.findIndex((l, i) => i > 0 && route.legs[i - 1].type === 'bus');
+  const leg = route.legs[li], turn = leg.points[0], dest = leg.points[1];
+  assert.equal(turn.kind, 'turn'); assert.equal(turn.turn, 'left');
+  const dTurn = W.dist(route.legs[li - 1].alight, turn), dOff = W.dist(turn, dest);
+  assert.ok(dTurn > 120 && dTurn < 160 && dOff > 180 && dOff < 230, `하차→모퉁이 ${Math.round(dTurn)}m, 모퉁이→사무실 ${Math.round(dOff)}m`);
+  const eng = W.createEngine({ io, now: () => t }); eng.start(route, li);
+  // 인도(승강장 동쪽 20m)에서 남쪽으로 걸어 모퉁이까지
+  const a = route.legs[li - 1].alight, M = (Math.PI * 6371000) / 180;
+  for (let s = 0; s <= dTurn; s += 1.2) { t += 1000; eng.onFix({ lat: a.lat - s / M, lng: turn.lng + 0.00005, acc: 6, heading: 180, speed: 1.2, t }); }
+  assert.ok(log.some((x) => /앞에서 왼쪽으로 꺾기/.test(x)), '사전 예고');
+  assert.ok(log.some((x) => /이 근처가 좌회전 지점임. 서울정형외과의원이 있는 건물을 끼고 왼쪽 골목/.test(x)), log.slice(-4).join('|'));
+  assert.equal(eng._S.pi, 1, '사무실 안내로 넘어감');
+  assert.ok(!log.some((x) => /도착/.test(x)));
+});
