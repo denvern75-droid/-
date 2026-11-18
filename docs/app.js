@@ -129,7 +129,8 @@
     if (data && fresh && (fresh.version || 0) > (data.version || 0)) {     // 배포된 경로가 새 판이면 문구는 새 판으로, 기록한 위치는 지점 id로 옮김
       const keep = {};
       data.routes.forEach((rt) => { if (rt.home) keep[rt.id + ':home'] = rt.home; rt.legs.forEach((l, i) => { (l.points || []).forEach((q) => { keep[rt.id + ':' + q.id] = q; }); if (l.alight) keep[rt.id + ':alight' + i] = l.alight; if (l.learned) keep[rt.id + ':learned' + i] = l.learned; }); });
-      const carry = (dst, src) => { if (src && W.hasXY(src) && ((src.samples && src.samples.length) || !W.hasXY(dst))) ['lat', 'lng', 'samples', 'recAcc', 'weak', 'quarantine'].forEach((k) => { if (src[k] !== undefined) dst[k] = src[k]; }); };
+      const carry = (dst, src) => { if (src && W.hasXY(src) && ((src.samples && src.samples.some((q) => q.t > 0)) || !W.hasXY(dst)))   // 폰에서 걷거나 공유해 얻은 좌표(t>0)만 옮김. 배포 자료(t=0)는 새 판 값을 씀
+      ['lat', 'lng', 'samples', 'recAcc', 'weak', 'quarantine'].forEach((k) => { if (src[k] !== undefined) dst[k] = src[k]; }); };
       fresh.routes.forEach((rt) => { if (keep[rt.id + ':home']) rt.home = keep[rt.id + ':home']; rt.legs.forEach((l, i) => { (l.points || []).forEach((q) => carry(q, keep[rt.id + ':' + q.id])); if (l.alight) carry(l.alight, keep[rt.id + ':alight' + i]); }); });   // 걸으며 만든 꺾는 곳은 새 판에 없으므로 '걸었던 기록' 문구도 옮기지 않음
       data = fresh; localStorage.setItem(LS_ROUTE, JSON.stringify(data));
     }

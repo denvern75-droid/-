@@ -420,9 +420,9 @@ test('접근성 재검증 2차 회귀: 구간 진입 때는 짧게 말하고, �
   while (eng.status().legIndex < walkIdx) eng.skipLeg();
   const said = log[log.length - 1];
   assert.ok(said.length <= 90, `하차 직후 안내가 김(${said.length}자): ${said}`);
-  assert.match(said, /도로 한가운데 승강장.*음향신호기가 있는 횡단보도.*왼쪽 인도로 건넘/);
+  assert.match(said, /도로 한가운데 승강장.*음향신호기가 있는 횡단보도.*왼쪽 인도로 건넌 뒤 오른쪽으로 꺾어 직진/);
   eng.detail();
-  assert.match(log[log.length - 1], /서울정형외과의원.*1층에 행복한 공인중개사 사무소.*3층/);
+  assert.match(log[log.length - 1], /서울정형외과의원.*불러봐노래연습장.*3층.*1층에 행복한 공인중개사 사무소/);
   assert.equal(W.spoken('탑승 버스는 51, 5602, 5627.'), '탑승 버스는 51, 5 6 0 2, 5 6 2 7.');
   assert.equal(W.spoken('거리 1.5킬로미터, 273미터.'), '거리 1.5킬로미터, 273미터.');
 });
@@ -443,7 +443,7 @@ test('출근 하차 후 구간: 좌회전 지점 근처에서 랜드마크를 �
   for (let s = 0; s <= dTurn; s += 1.2) { t += 1000; eng.onFix({ lat: a.lat - s / M, lng: turn.lng + 0.00005, acc: 6, heading: 180, speed: 1.2, t }); }
   // 4차 검증으로 기대 변경: 확인되지 않은(약한) 꺾는 곳은 30m·12m 사전 '꺾기' 예고를 하지 않음(지도 오차로 엉뚱한 곳에서 꺾게 할 수 있음). 25m 안에서 '이 근처' 로만 알림
   assert.ok(!log.some((x) => /앞에서 왼쪽으로 꺾기|곧 왼쪽으로 꺾기/.test(x)), '약한 꺾는 곳 사전 예고 없음');
-  assert.ok(log.some((x) => /이 근처가 좌회전 지점임. 서울정형외과의원이 있는 건물을 끼고 왼쪽 골목/.test(x)), log.slice(-4).join('|'));
+  assert.ok(log.some((x) => /이 근처가 좌회전 지점임. 서울정형외과의원 건물을 끼고 왼쪽 골목 시흥대로138길/.test(x)), log.slice(-4).join('|'));
   assert.equal(eng._S.pi, 1, '사무실 안내로 넘어감');
   assert.ok(!log.some((x) => /도착/.test(x)));
 });
@@ -460,7 +460,7 @@ test('재검증 3차 회귀: 중앙 승강장 하차 직후에는 건넜다고 �
   const bad = log.filter((s) => /시 방향|정면|목표는|좌회전 지점까지/.test(s));   // 승강장을 따라 횡단보도까지의 거리는 허용
   assert.equal(bad.length, 0, '승강장 위에서 방향·거리를 말하면 안 됨: ' + bad.join('|'));
   assert.ok(eng.status().waitCross);
-  assert.match(log[log.length - 1], /음향신호기가 있는 횡단보도.*왼쪽 인도로 건넘.*인도에 올라섰으면 다음 버튼/);
+  assert.match(log[log.length - 1], /음향신호기가 있는 횡단보도.*왼쪽 인도로 건넌 뒤.*인도에 올라섰으면 다음 버튼/);
   eng.next(); assert.equal(eng._S.pi, 0, '건넜음 확인은 지점을 넘기지 않음'); assert.ok(!eng.status().waitCross);
   t += 1000; eng.onFix({ lat: a.lat, lng: a.lng + 0.0002, acc: 6, heading: 180, speed: 1.2, t });
   assert.match(log[log.length - 1], /좌회전 지점까지 대략 \d+미터. 건넌 인도에서 버스가 가던 방향으로 계속 가세요/);   // 꺾는 곳은 방위 없이 거리만(4차: '가던 길' 대신 기준을 밝힘)
@@ -682,4 +682,29 @@ test('4차: 약한 목적지 40m 안에 1분 머물면 안내를 마치고 반�
   assert.equal(eng.status().legIndex, li + 1, '안내 종료');
   assert.ok(log.some((s) => /주변에 1분 머물러 안내를 마침/.test(s)));
   assert.ok(log.filter((s) => /방향을 알 수 없음/.test(s)).length <= 1);
+});
+
+// ---------- 동료 제공 좌표(2026-11-18) 반영 ----------
+test('동료 좌표: 퇴근은 모퉁이 우회전 → 왼쪽 횡단보도 → 중앙 승강장 순서이고, 출근 때 건넌 횡단보도 앞에서는 건너라고 하지 않음', () => {
+  const route = JSON.parse(JSON.stringify(require('../route.json'))).routes.find((r) => r.id === 'R');
+  const l = route.legs[0], [turn, cross, stop] = l.points;
+  assert.deepEqual(l.points.map((p) => p.kind), ['turn', 'crossing', 'stop']);
+  assert.equal(turn.turn, 'right'); assert.equal(cross.turn, 'left'); assert.ok(stop.median);
+  assert.ok(W.dist(cross, stop) < 45, '횡단보도는 승차 승강장 바로 북쪽');
+  const log = []; let t = 50_000_000;
+  const eng = W.createEngine({ io: { speak: (s) => { log.push(s); }, vibrate() {}, beep() {}, notify() {} }, now: () => t, handsFree: true });
+  eng.start(route, 0); eng._S.pi = 1;
+  const kx = (Math.PI * 6371000) / 180 * Math.cos(cross.lat * Math.PI / 180), M = (Math.PI * 6371000) / 180;
+  const n0 = log.length;
+  for (let i = 0; i <= 200; i += 2) { t += 1500; eng.onFix({ lat: turn.lat + i / M, lng: turn.lng + 2 / kx, acc: 6, heading: 0, speed: 1.2, t }); }   // 큰길 동쪽 인도를 따라 북쪽으로
+  assert.ok(log.slice(n0).some((s) => /문성초등학교를 두고 큰길 인도를 따라 계속 가세요/.test(s)));
+  assert.ok(!log.slice(n0).some((s) => /이 근처 왼쪽에 도로 가운데 승강장으로 건너는 횡단보도/.test(s)), '출근 때 횡단보도 부근(남쪽)에서는 건너라고 하지 않음');
+});
+
+test('동료 좌표: 퇴근 버스 하차 뒤 여의도역 5번 출구까지 도보 구간이 있음', () => {
+  const route = require('../route.json').routes.find((r) => r.id === 'R');
+  const bi = route.legs.findIndex((l) => l.type === 'bus'), w = route.legs[bi + 1];
+  assert.equal(w.type, 'walk'); assert.equal(w.points[0].kind, 'entrance');
+  const d = W.dist(route.legs[bi].alight, w.points[0]); assert.ok(d > 30 && d < 80, `${Math.round(d)}m`);
+  assert.equal(route.legs[bi + 2].type, 'indoor');
 });
