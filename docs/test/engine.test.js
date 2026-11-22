@@ -422,7 +422,7 @@ test('접근성 재검증 2차 회귀: 구간 진입 때는 짧게 말하고, �
   assert.ok(said.length <= 90, `하차 직후 안내가 김(${said.length}자): ${said}`);
   assert.match(said, /도로 한가운데 승강장.*음향신호기가 있는 횡단보도.*왼쪽 인도로 건넌 뒤 오른쪽으로 꺾어/);
   eng.detail();
-  assert.match(log[log.length - 1], /서울정형외과의원.*불러봐노래연습장.*3층.*1층에 행복한 공인중개사 사무소/);
+  assert.match(log[log.length - 1], /서울정형외과의원.*건물과 건물 사이 통로.*점자블록.*노래방 유리문은 사무실 출입구가 아님.*3층/);
   assert.equal(W.spoken('탑승 버스는 51, 5602, 5627.'), '탑승 버스는 51, 5 6 0 2, 5 6 2 7.');
   assert.equal(W.spoken('거리 1.5킬로미터, 273미터.'), '거리 1.5킬로미터, 273미터.');
 });
@@ -635,9 +635,9 @@ test('4차: 북쪽 승강장(18001)에 내리면 그쪽 횡단보도(뒤쪽 약 
 });
 
 test('4차: 버튼 문장은 절 단위로 빼고 남은 말을 자연스럽게 맺음', () => {
-  const route = B4(), li = route.legs.findIndex((l) => l.startMedian), dest = route.legs[li].points[1];
+  const route = B4(), li = route.legs.findIndex((l) => l.startMedian), pts = route.legs[li].points, dest = pts[pts.length - 1]; dest.weak = true; dest.recAcc = 20;   // 확인 전(약한) 목적지 동작 시험
   const { log, eng, fix } = mk4(route, li, 43_000_000);
-  eng._S.crossed = true; eng._S.pi = 1;
+  eng._S.crossed = true; eng._S.pi = pts.length - 1;
   for (let i = 0; i < 5; i++) fix(dest.lat, dest.lng, 0.1);
   const m = log.find((s) => /저장된 위치에 왔음/.test(s));
   assert.ok(m && /주변 사람에게 물어보세요\.$/.test(m), m);
@@ -679,9 +679,9 @@ test('4차: 약한 꺾는 곳에 25m 안으로 들어오지 않고 멀어지면 
 });
 
 test('4차: 약한 목적지 40m 안에 1분 머물면 안내를 마치고 반복하지 않음', () => {
-  const route = B4(), li = route.legs.findIndex((l) => l.startMedian), dest = route.legs[li].points[1];
+  const route = B4(), li = route.legs.findIndex((l) => l.startMedian), pts = route.legs[li].points, dest = pts[pts.length - 1]; dest.weak = true; dest.recAcc = 20;   // 확인 전(약한) 목적지 동작 시험
   const { log, eng, fix } = mk4(route, li, 47_000_000);
-  eng._S.crossed = true; eng._S.pi = 1;
+  eng._S.crossed = true; eng._S.pi = pts.length - 1;
   for (let i = 0; i < 80; i++) fix(dest.lat, dest.lng + 0.00005, 0.1);
   assert.equal(eng.status().legIndex, li + 1, '안내 종료');
   assert.ok(log.some((s) => /주변에 1분 머물러 안내를 마침/.test(s)));
@@ -728,4 +728,14 @@ test('실제 기록: 문성초 하차 뒤 횡단보도를 건너면 바로(30m �
   assert.ok(crossedAt != null, '건넘 판단');
   assert.ok(crossedAt >= 37.4734, `건넘 판단 위치가 늦음: ${crossedAt}`);
   assert.ok(log.some((s) => /좌회전 지점까지 \d+미터/.test(s)));
+});
+
+test('이용자 확인(2026-11-22): 사무실 출입구는 골목 오른쪽 건물 사이 통로 안쪽, 노래방 유리문 아님, 3층', () => {
+  const route = require('../route.json').routes.find((r) => r.id === 'E');
+  const l = route.legs.find((x) => x.startMedian), [turn, gap, dest] = l.points;
+  assert.deepEqual(l.points.map((p) => p.kind), ['turn', 'turn', 'dest']);
+  assert.equal(turn.turn, 'left'); assert.equal(gap.turn, 'right');
+  assert.match(gap.say, /건물과 건물 사이 통로.*점자블록/); assert.match(dest.say, /1층과 2층은 다른 직업재활시설.*3층/);
+  assert.ok(!/불러봐노래연습장이라고 쓰여/.test(JSON.stringify(l)), '노래방 유리문을 출입구로 안내하지 않음');
+  const d1 = W.dist(turn, gap), d2 = W.dist(gap, dest); assert.ok(d1 > 180 && d1 < 240 && d2 > 15 && d2 < 45, `${Math.round(d1)}m, ${Math.round(d2)}m`);
 });
