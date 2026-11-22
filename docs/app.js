@@ -483,15 +483,63 @@
   const saveProg = () => { if (!started || !route) return; const s = engine.snapshot(); if (s) localStorage.setItem(PROG, JSON.stringify(Object.assign({ routeId: route.id, t: Date.now() }, s))); else if (engine.status().legIndex >= (route.legs || []).length) localStorage.removeItem(PROG); };
   const refreshStartBtn = () => { $('startBtn').textContent = loadProg() ? '이어서 안내 시작' : '안내 시작'; };
   setInterval(saveProg, 2000);
+  // 현재 위치에서 가장 가까운 경로·구간을 고름(이용자가 경로를 고르거나 단계를 건너뛰지 않아도 되게).
+  // 중앙 승강장 하차 지점(출근 하차·퇴근 승차가 같은 곳)은 애매해 후보에서 뺌. 700m 안에 후보가 없으면 null
+  function pickStart(f) {
+    const cands = [];
+    const add = (ri, li, p, why) => { if (p && W.hasXY(p)) cands.push({ ri, li, d: W.dist(f, p), why }); };
+    data.routes.forEach((rt, ri) => {
+      if (!['B', 'R', 'E'].includes(rt.id)) return;
+      rt.legs.forEach((l, li) => {
+        if (l.type !== 'walk' || l.startMedian) return;
+        if (rt.id === 'R' && li === 0) {   // 퇴근 출발: 사무실 근처
+          const e = data.routes.find((x) => x.id === 'E'); const off = e && e.legs.filter((x) => x.type === 'walk').pop();
+          return add(ri, li, off && off.points[off.points.length - 1], '사무실');
+        }
+        add(ri, li, l.start, l.start && l.start.name);
+        l.points.forEach((p) => add(ri, li, p, p.name));
+        const pb = li > 0 ? rt.legs[li - 1] : null; if (pb && pb.type === 'bus') add(ri, li, pb.alight, pb.alight && pb.alight.name);
+      });
+    });
+    // 역 주변(출구 좌표가 없는 곳)과 출근·퇴근이 겹치는 곳은 시간으로 나눔. 좌표는 OSM 역 이름 정류장 기준(2026-11-22 조회)
+    const am = new Date().getHours() < 15, idx = (id) => data.routes.findIndex((x) => x.id === id);
+    const ER = am ? null : data.routes[idx('R')];
+    [[{ lat: 37.5555076, lng: 127.0199438 }, am ? ['E', 0] : ['R', ER ? ER.legs.length - 1 : 0], '신금호역'],
+     [{ lat: 37.4833516, lng: 126.9417168 }, ['B', 0], '봉천역'],
+     [{ lat: 37.4840, lng: 126.9030 }, ['B', 1], '구로디지털단지역']].forEach(([p, [id, li], why]) => { if (idx(id) >= 0) add(idx(id), li, p, why); });
+    const e = data.routes[idx('E')], ae = e && e.legs.find((l) => l.type === 'bus' && l.alight && W.hasXY(l.alight));
+    if (ae && Math.min(W.dist(f, ae.alight), W.hasXY(ae.alight.alt) ? W.dist(f, ae.alight.alt) : Infinity) <= 150) {   // 문성초등학교 정류장: 오전이면 출근 하차 뒤, 오후면 퇴근 출발
+      const r = idx(am ? 'E' : 'R'), rt = data.routes[r], li = am ? rt.legs.findIndex((l) => l.startMedian) : 0;
+      return { ri: r, li, d: 0, why: '문성초등학교 정류장' };
+    }
+    cands.sort((x, y) => x.d - y.d);
+    return cands.length && cands[0].d <= 700 ? cands[0] : null;
+  }
+  let starting = false;
   $('startBtn').onclick = async () => {
-    route = data.routes[+$('routeSel').value];
-    started = true; startGeo(); startCompass();
+    if (starting || started) return; starting = true;
+    startGeo(); startCompass();
     let wakeFail = false;
     try { wake = await navigator.wakeLock.request('screen'); } catch (e) { wakeFail = true; }
     if (set.noti && 'Notification' in window && Notification.permission === 'default') await Notification.requestPermission();
+    io.speak('현재 위치를 확인해 경로를 자동으로 고름. 잠시 기다리세요.', 'high');
+    // 위치가 잡힐 때까지 기다림(지하에서는 지상에 나올 때까지). 1분마다 기다리는 중임을 알림
+    const t0 = Date.now(); let saidAt = t0;
+    while (!(rawFix && rawFix.t >= t0 && rawFix.acc <= 80)) {
+      await new Promise((r) => setTimeout(r, 1000));
+      if (Date.now() - saidAt >= 60000) { saidAt = Date.now(); io.speak('아직 위치를 잡지 못했음. 지상에 나오면 자동으로 안내를 시작함.', 'queue'); }
+    }
+    const pick = pickStart(rawFix);
+    route = pick ? data.routes[pick.ri] : data.routes[+$('routeSel').value];
+    if (pick) $('routeSel').value = pick.ri;
+    const li = pick ? pick.li : 0;
+    started = true; starting = false;
     const prog = loadProg();
     const newTrip = tripStale(); if (newTrip) tripStart();   // 기록을 먼저 열어 첫 구간 사건부터 남김
-    if (prog && prog.routeId === route.id) engine.restore(route, prog); else engine.start(route, 0);
+    if (pick) { tripEvent('자동 시작', { route: route.id, leg: li, near: pick.why, m: Math.round(pick.d) }); io.speak(`${route.name.split('.')[0]} 경로, ${pick.why || ''} 근처에서 시작함.`, 'high'); }
+    else io.speak('가까운 경로 지점이 없어 목록에서 선택된 경로를 처음부터 안내함.', 'high');
+    if (prog && prog.routeId === route.id && (prog.li == null || prog.li >= li)) engine.restore(route, prog); else engine.start(route, li);
+    if (lastFix) engine.onFix(lastFix);
     if (wakeFail) io.speak('화면이 꺼지면 안내가 멈출 수 있음. 화면을 켜 두세요.', 'queue');
     if (newTrip) io.speak('이동 기록을 함께 저장함.', 'queue');
     $('startBtn').hidden = true;   // 진행 중 실수로 눌러 처음으로 돌아가지 않게 숨김
