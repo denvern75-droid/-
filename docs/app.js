@@ -505,15 +505,18 @@
     const am = new Date().getHours() < 15, idx = (id) => data.routes.findIndex((x) => x.id === id);
     const ER = am ? null : data.routes[idx('R')];
     [[{ lat: 37.5555076, lng: 127.0199438 }, am ? ['E', 0] : ['R', ER ? ER.legs.length - 1 : 0], '신금호역'],
+     [{ lat: 37.5482380, lng: 127.0156690 }, am ? ['D', 0] : null, '금호역'],
      [{ lat: 37.4833516, lng: 126.9417168 }, ['B', 0], '봉천역'],
-     [{ lat: 37.4840, lng: 126.9030 }, ['B', 1], '구로디지털단지역']].forEach(([p, [id, li], why]) => { if (idx(id) >= 0) add(idx(id), li, p, why); });
+     [{ lat: 37.4840, lng: 126.9030 }, ['B', 1], '구로디지털단지역']].forEach(([p, to, why]) => { if (!to || idx(to[0]) < 0) return; const dd = W.dist(f, p); if (dd <= 300) cands.push({ ri: idx(to[0]), li: to[1], d: dd, why }); });   // 역 기준점은 300m 안에서만(집에서 누르면 두 역 중 하나로 잘못 고르지 않게)
     const e = data.routes[idx('E')], ae = e && e.legs.find((l) => l.type === 'bus' && l.alight && W.hasXY(l.alight));
     if (ae && Math.min(W.dist(f, ae.alight), W.hasXY(ae.alight.alt) ? W.dist(f, ae.alight.alt) : Infinity) <= 150) {   // 문성초등학교 정류장: 오전이면 출근 하차 뒤, 오후면 퇴근 출발
       const r = idx(am ? 'E' : 'R'), rt = data.routes[r], li = am ? rt.legs.findIndex((l) => l.startMedian) : 0;
       return { ri: r, li, d: 0, why: '문성초등학교 정류장' };
     }
     cands.sort((x, y) => x.d - y.d);
-    return cands.length && cands[0].d <= 700 ? cands[0] : null;
+    if (cands.length && cands[0].d <= 700) return cands[0];
+    if (am && idx('E') >= 0) return { ri: idx('E'), li: 0, d: 0, why: '집 근처로 보고 신금호역 쪽 출근' };   // 오전에 역·경로 근처가 아니면 집에서 출발하는 기본 출근 경로
+    return null;
   }
   let starting = false;
   $('startBtn').onclick = async () => {
