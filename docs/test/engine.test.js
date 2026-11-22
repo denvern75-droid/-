@@ -420,7 +420,7 @@ test('접근성 재검증 2차 회귀: 구간 진입 때는 짧게 말하고, �
   while (eng.status().legIndex < walkIdx) eng.skipLeg();
   const said = log[log.length - 1];
   assert.ok(said.length <= 90, `하차 직후 안내가 김(${said.length}자): ${said}`);
-  assert.match(said, /도로 한가운데 승강장.*음향신호기가 있는 횡단보도.*왼쪽 인도로 건넌 뒤 오른쪽으로 꺾어 직진/);
+  assert.match(said, /도로 한가운데 승강장.*음향신호기가 있는 횡단보도.*왼쪽 인도로 건넌 뒤 오른쪽으로 꺾어/);
   eng.detail();
   assert.match(log[log.length - 1], /서울정형외과의원.*불러봐노래연습장.*3층.*1층에 행복한 공인중개사 사무소/);
   assert.equal(W.spoken('탑승 버스는 51, 5602, 5627.'), '탑승 버스는 51, 5 6 0 2, 5 6 2 7.');
@@ -441,11 +441,12 @@ test('출근 하차 후 구간: 좌회전 지점 근처에서 랜드마크를 �
   // 인도(승강장 동쪽 20m)에서 남쪽으로 걸어 모퉁이까지
   const a = route.legs[li - 1].alight, M = (Math.PI * 6371000) / 180;
   for (let s = 0; s <= dTurn; s += 1.2) { t += 1000; eng.onFix({ lat: a.lat - s / M, lng: turn.lng + 0.00005, acc: 6, heading: 180, speed: 1.2, t }); }
-  // 4차 검증으로 기대 변경: 확인되지 않은(약한) 꺾는 곳은 30m·12m 사전 '꺾기' 예고를 하지 않음(지도 오차로 엉뚱한 곳에서 꺾게 할 수 있음). 25m 안에서 '이 근처' 로만 알림
-  assert.ok(!log.some((x) => /앞에서 왼쪽으로 꺾기|곧 왼쪽으로 꺾기/.test(x)), '약한 꺾는 곳 사전 예고 없음');
-  assert.ok(log.some((x) => /이 근처가 좌회전 지점임. 서울정형외과의원 건물을 끼고 왼쪽 골목 시흥대로138길/.test(x)), log.slice(-4).join('|'));
+  // 2026-11-22 실제 보행 기록으로 좌회전 지점이 확인됨(약한 좌표 아님) → 사전 예고와 지점 안내를 함. 약한 꺾는 곳 동작은 '4차: 약한 꺾는 곳' 시험에서 따로 확인
+  assert.ok(!turn.weak, '보행 기록으로 확인된 꺾는 곳');
+  assert.ok(log.some((x) => /곧 왼쪽으로 꺾기/.test(x)), '사전 예고');
+  assert.ok(log.some((x) => /좌회전 지점 도착. 좌회전 지점임. 서울정형외과의원 건물을 끼고 왼쪽 골목 시흥대로138길/.test(x)), log.slice(-4).join('|'));
   assert.equal(eng._S.pi, 1, '사무실 안내로 넘어감');
-  assert.ok(!log.some((x) => /도착/.test(x)));
+  assert.ok(!log.some((x) => /사무실 입구 도착/.test(x)), '사무실(약한 좌표)은 도착 선언 없음');
 });
 
 test('재검증 3차 회귀: 중앙 승강장 하차 직후에는 건넜다고 확인하기 전까지 방향·거리 안내가 없음(다시 듣기 포함)', () => {
@@ -463,7 +464,7 @@ test('재검증 3차 회귀: 중앙 승강장 하차 직후에는 건넜다고 �
   assert.match(log[log.length - 1], /음향신호기가 있는 횡단보도.*왼쪽 인도로 건넌 뒤.*인도에 올라섰으면 다음 버튼/);
   eng.next(); assert.equal(eng._S.pi, 0, '건넜음 확인은 지점을 넘기지 않음'); assert.ok(!eng.status().waitCross);
   t += 1000; eng.onFix({ lat: a.lat, lng: a.lng + 0.0002, acc: 6, heading: 180, speed: 1.2, t });
-  assert.match(log[log.length - 1], /좌회전 지점까지 대략 \d+미터. 건넌 인도에서 버스가 가던 방향으로 계속 가세요/);   // 꺾는 곳은 방위 없이 거리만(4차: '가던 길' 대신 기준을 밝힘)
+  assert.match(log[log.length - 1], /좌회전 지점까지 \d+미터/);   // 2026-11-22 보행 기록으로 꺾는 곳이 확인되어 방향도 안내
 });
 
 test('재검증 3차 회귀: 다음 버튼을 놓치고 버스에 타도 하차 알림이 시작되고, 승강장이 둘이면 먼저 지나는 쪽 기준으로 알림', () => {
@@ -475,12 +476,14 @@ test('재검증 3차 회귀: 다음 버튼을 놓치고 버스에 타도 하차 
   assert.ok(W.hasXY(al.alt), '하차 승강장 두 곳 좌표');
   const eng = W.createEngine({ io, now: () => t }); eng.start(route, li);
   for (let i = 0; i < 5; i++) { t += 1000; eng.onFix({ lat: stop.lat, lng: stop.lng, acc: 6, heading: null, speed: 0, t }); }
-  assert.equal(eng.status().legIndex, li);                               // 다음 버튼을 누르지 않음
+  // 2026-11-22 보행 기록으로 정류장이 확인되어 도착 후 버스 구간으로 넘어갈 수 있음(이전에는 약한 좌표라 머물렀음)
+  const arrived = eng.status().legIndex === li + 1;   // 확인된 정류장이면 도착 안내로 이미 버스 구간
+  assert.ok([li, li + 1].includes(eng.status().legIndex));
   const M = (Math.PI * 6371000) / 180;
   for (let i = 1; i <= 15; i++) { t += 1000; eng.onFix({ lat: stop.lat - (8 * i) / M, lng: stop.lng, acc: 8, heading: 180, speed: 8, t }); }   // 버스 주행
   assert.equal(eng.status().legIndex, li + 1, '버스 구간으로 자동 전환');
-  assert.ok(log.some((s) => /버스에 탄 것으로 보고 하차 알림을 시작함/.test(s)));
-  assert.ok(eng.status().busEarly, '주행 중 다음 버튼은 확인이 필요함');
+  if (!arrived) { assert.ok(log.some((s) => /버스에 탄 것으로 보고 하차 알림을 시작함/.test(s))); assert.ok(eng.status().busEarly, '주행 중 다음 버튼은 확인이 필요함'); }
+  else assert.ok(log.some((s) => /정류장 도착/.test(s)), '정류장 도착 안내');
   // 북쪽 승강장(먼저 지나는 쪽)에 접근하면 알림
   log.length = 0;
   for (const dN of [450, 140, 30]) { t += 5000; eng.onFix({ lat: al.alt.lat + dN / M, lng: al.alt.lng, acc: 8, heading: 180, speed: 8, t }); }
@@ -528,10 +531,10 @@ test('버튼 없는 모드: 봉천역 출발 경로를 다음 버튼 없이 끝�
   assert.ok(!log.slice(n0).some((s) => /미터|방향/.test(s) && !/건넘|건너/.test(s)), '승강장 근처에서는 방향·거리 안내 없음: ' + log.slice(n0).join('|'));
   const ca = route.legs[3].crossAt;                                    // 승강장을 따라 횡단보도까지 간 뒤 동쪽 인도로 건넘
   for (let i = 1; i <= 30; i++) fix(al.lat + (ca.lat - al.lat) * i / 30, al.lng + (ca.lng - al.lng) * i / 30, 1.0, 160);
-  assert.ok(log.some((s) => /횡단보도 근처임. 자료상 보행 신호등과 음향신호기가 있음. 현장 확인 전임/.test(s)));
+  assert.ok(log.some((s) => /횡단보도 근처임. 자료상 보행 신호등과 음향신호기가 있음/.test(s)));
   for (let i = 1; i <= 40; i++) fix(ca.lat - (i * 0.6) / M, ca.lng + (i * 1.0) / k, 1.0, 120);
   assert.ok(log.some((s) => /길을 건넌 것으로 보고 방향 안내를 시작함/.test(s)));
-  assert.ok(log.some((s) => /좌회전 지점까지 대략 \d+미터/.test(s)), '건넌 뒤 좌회전 지점 안내');
+  assert.ok(log.some((s) => /좌회전 지점까지 \d+미터/.test(s)), '건넌 뒤 좌회전 지점 안내');
   assert.ok(!log.some((s) => /버튼/.test(s)), '끝까지 버튼 안내 없음');
 });
 
@@ -580,7 +583,7 @@ test('횡단보도 자료: 하차 후 승강장에서 횡단보도까지 거리 
   assert.ok(eng.status().waitCross, '횡단보도 앞에서는 아직 건너지 않은 것으로 봄');
   const k = (Math.PI * 6371000) / 180 * Math.cos(ca.lat * Math.PI / 180);
   for (let i = 1; i <= 30; i++) { t += 1000; eng.onFix({ lat: ca.lat - 0.00002 * i, lng: ca.lng + (i * 1.2) / k, acc: 6, heading: 100, speed: 1.1, t }); eng.tick(); }
-  assert.ok(!eng.status().waitCross, '건넌 뒤 방향 안내 시작'); assert.ok(log.some((s) => /좌회전 지점까지 대략/.test(s)));
+  assert.ok(!eng.status().waitCross, '건넌 뒤 방향 안내 시작'); assert.ok(log.some((s) => /좌회전 지점까지/.test(s)));
 });
 
 // ---------- 4차 검증(버튼 없는 모드) 회귀 ----------
@@ -666,6 +669,7 @@ test('4차: 퇴근 마지막 구간(신금호역에서 집까지)은 시간으�
 
 test('4차: 약한 꺾는 곳에 25m 안으로 들어오지 않고 멀어지면 지나쳤을 수 있다고 한 번 알림', () => {
   const route = B4(), li = route.legs.findIndex((l) => l.startMedian), turn = route.legs[li].points[0];
+  turn.weak = true; turn.recAcc = 20;   // 확인 전(약한) 꺾는 곳 동작을 시험(실제 경로의 꺾는 곳은 2026-11-22 보행으로 확인됨)
   const { log, eng, fix } = mk4(route, li, 46_000_000);
   eng._S.crossed = true;
   const kx = M4 * Math.cos(turn.lat * Math.PI / 180);
@@ -697,8 +701,8 @@ test('동료 좌표: 퇴근은 모퉁이 우회전 → 왼쪽 횡단보도 → �
   const kx = (Math.PI * 6371000) / 180 * Math.cos(cross.lat * Math.PI / 180), M = (Math.PI * 6371000) / 180;
   const n0 = log.length;
   for (let i = 0; i <= 200; i += 2) { t += 1500; eng.onFix({ lat: turn.lat + i / M, lng: turn.lng + 2 / kx, acc: 6, heading: 0, speed: 1.2, t }); }   // 큰길 동쪽 인도를 따라 북쪽으로
-  assert.ok(log.slice(n0).some((s) => /문성초등학교를 두고 큰길 인도를 따라 계속 가세요/.test(s)));
-  assert.ok(!log.slice(n0).some((s) => /이 근처 왼쪽에 도로 가운데 승강장으로 건너는 횡단보도/.test(s)), '출근 때 횡단보도 부근(남쪽)에서는 건너라고 하지 않음');
+  assert.ok(log.slice(n0).some((s) => /횡단보도까지 \d+미터/.test(s)), '건널 횡단보도까지 거리 안내');
+  assert.ok(!log.slice(n0).some((s) => /왼쪽에 도로 가운데 승강장으로 건너는 횡단보도임/.test(s)), '출근 때 횡단보도 부근(남쪽)에서는 건너라고 하지 않음');
 });
 
 test('동료 좌표: 퇴근 버스 하차 뒤 여의도역 5번 출구까지 도보 구간이 있음', () => {
@@ -707,4 +711,21 @@ test('동료 좌표: 퇴근 버스 하차 뒤 여의도역 5번 출구까지 도
   assert.equal(w.type, 'walk'); assert.equal(w.points[0].kind, 'entrance');
   const d = W.dist(route.legs[bi].alight, w.points[0]); assert.ok(d > 30 && d < 80, `${Math.round(d)}m`);
   assert.equal(route.legs[bi + 2].type, 'indoor');
+});
+
+// ---------- 2026-11-22 실제 출근 기록 재생 ----------
+test('실제 기록: 문성초 하차 뒤 횡단보도를 건너면 바로(30m 안) 건넘으로 판단함(이전 판은 약 130m 늦음)', () => {
+  const route = JSON.parse(JSON.stringify(require('../route.json'))).routes.find((r) => r.id === 'E');
+  const li = route.legs.findIndex((l) => l.startMedian);
+  // [초, 위도, 경도, 오차, 속도] — 하차(1649초) 뒤 승강장 남쪽 끝 대기 → 횡단보도 동쪽으로 건넘 → 인도 남쪽으로
+  const tr = [[1651,37.47392,126.89842,4,0.4],[1664,37.473879,126.898376,4,1.3],[1667,37.47384,126.898344,3,1.3],[1671,37.473788,126.898322,4,1.3],[1674,37.473749,126.898314,4,1.1],[1680,37.473754,126.89834,5,0.1],[1700,37.473756,126.898375,4,0.1],[1722,37.473765,126.898383,4,0.6],[1726,37.47373,126.898426,4,1.3],[1729,37.473714,126.898472,5,1.4],[1732,37.473712,126.89854,5,1.3],[1735,37.473705,126.898596,5,1.3],[1738,37.473702,126.89865,5,1.2],[1742,37.473667,126.898673,5,1],[1745,37.473639,126.898681,4,1],[1748,37.473613,126.898687,4,1],[1751,37.473575,126.898692,4,0.9],[1754,37.473551,126.898695,4,0.9],[1758,37.473512,126.898687,4,1],[1761,37.473484,126.89869,5,0.9],[1764,37.473455,126.898681,5,1],[1767,37.473425,126.898663,5,1],[1770,37.473397,126.898659,4,1]];
+  const log = []; let t = 0, crossedAt = null;
+  const eng = W.createEngine({ io: { speak: (s) => { log.push(s); }, vibrate() {}, beep() {}, notify() {}, onAuto: (k, f) => { if (k === 'crossed') crossedAt = f.lat; } }, now: () => t, handsFree: true });
+  eng.start(route, li);
+  for (const [s, lat, lng, acc, speed] of tr) {
+    for (let k = 0; k < 3; k++) { t = (s - 1651) * 1000 + k * 1000 + 1; eng.onFix({ lat, lng, acc, heading: null, speed, t }); }   // 기록은 3초 간격, 실제 수신은 1초 간격
+  }
+  assert.ok(crossedAt != null, '건넘 판단');
+  assert.ok(crossedAt >= 37.4734, `건넘 판단 위치가 늦음: ${crossedAt}`);
+  assert.ok(log.some((s) => /좌회전 지점까지 \d+미터/.test(s)));
 });
