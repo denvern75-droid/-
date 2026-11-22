@@ -466,14 +466,20 @@
   $('tripShareBtn').onclick = async () => {
     const all = loadTrips();
     if (!all.length) return io.speak('저장된 이동 기록이 없음.', 'high');
-    const text = JSON.stringify({ app: 'gildongmu', exported: new Date().toISOString(), route: data, trips: all });
+    saveTrip();
+    // 크롬 안드로이드는 JSON 파일 공유를 막고, 긴 글 공유는 크기 제한으로 실패함 → 텍스트(.txt) 파일로 보내고 경로 전체 자료는 빼서 크기를 줄임
+    const text = JSON.stringify({ app: 'gildongmu', exported: new Date().toISOString(), routeVersion: data && data.version, trips: all });
+    const name = 'gildongmu-trips-' + new Date().toISOString().slice(0, 10) + '.txt';
+    const file = new File([text], name, { type: 'text/plain' });
+    const download = () => { try { const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = name; document.body.appendChild(a); a.click(); a.remove(); return true; } catch (e) { return false; } };
     try {
-      const file = new File([text], 'gildongmu-trips.json', { type: 'application/json' });
-      if (navigator.canShare && navigator.canShare({ files: [file] })) await navigator.share({ files: [file], title: '길동무 이동 기록' });
-      else if (navigator.share) await navigator.share({ title: '길동무 이동 기록', text });
-      else { await navigator.clipboard.writeText(text); }
-      io.speak(`이동 기록 ${all.length}건을 보낼 준비를 했음.`, 'high');
-    } catch (e) { io.speak('이동 기록 보내기를 취소했음.', 'high'); }
+      if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: '길동무 이동 기록' }); io.speak(`이동 기록 ${all.length}건을 보냈음.`, 'high'); return; }
+      throw new Error('파일 공유 미지원');
+    } catch (e) {
+      if (e && e.name === 'AbortError') return io.speak('보내기 창을 닫았음. 다시 누르면 다시 열림.', 'high');
+      const ok = download();
+      io.speak(ok ? `공유가 되지 않아 이동 기록 ${all.length}건을 폰의 다운로드 폴더에 ${name} 파일로 저장했음.` : '이동 기록을 보내지 못했음. 기록은 폰에 그대로 남아 있음.', 'high');
+    }
   };
 
   // ---------- 버튼 ----------
